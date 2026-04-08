@@ -1,0 +1,39 @@
+modLoader="javafml"
+loaderVersion="${loader_version_range}"
+license="${mod_license}"
+
+[[mods]]
+modId="${mod_id}"
+version="${mod_version}"
+displayName="${mod_name}"
+displayURL="https://github.com/Gfortes/ccpython"
+authors="Gfortes"
+description='''
+Adds a second, sandboxed Python runtime to CC: Tweaked computers and turtles.
+Python executes on the server only, reuses the CraftOS event model through a Lua bridge,
+and keeps the client responsible solely for terminal UI and status sync.
+'''
+
+[[mixins]]
+config="${mod_id}.mixins.json"
+
+[[dependencies.${mod_id}]]
+modId="neoforge"
+type="required"
+versionRange="[${neo_version},)"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.${mod_id}]]
+modId="minecraft"
+type="required"
+versionRange="${minecraft_version_range}"
+ordering="NONE"
+side="BOTH"
+
+[[dependencies.${mod_id}]]
+modId="computercraft"
+type="required"
+versionRange="[${cct_version},)"
+ordering="AFTER"
+side="BOTH"

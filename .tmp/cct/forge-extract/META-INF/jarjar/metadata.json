@@ -1,0 +1,28 @@
+{
+  "jars": [
+    {
+      "identifier": {
+        "group": "cc.tweaked",
+        "artifact": "cobalt"
+      },
+      "version": {
+        "range": "[0.9.7,)",
+        "artifactVersion": "0.9.7"
+      },
+      "path": "META-INF/jarjar/cobalt-0.9.7.jar",
+      "isObfuscated": false
+    },
+    {
+      "identifier": {
+        "group": "com.jcraft",
+        "artifact": "jzlib"
+      },
+      "version": {
+        "range": "[1.1.3,)",
+        "artifactVersion": "1.1.3"
+      },
+      "path": "META-INF/jarjar/jzlib-1.1.3.jar",
+      "isObfuscated": false
+    }
+  ]
+}

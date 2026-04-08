@@ -1,0 +1,15 @@
+python <file.py> [args...]
+
+Runs a Python program using the CC Python Runtime server-side GraalPy sandbox.
+
+python
+py
+
+Starts the interactive REPL.
+
+The Python runtime:
+- executes only on the server
+- reuses CraftOS events through a Lua bridge
+- blocks direct network, JVM and host filesystem access
+- exposes CC APIs through Python modules:
+  term, turtle, rednet, redstone, peripheral, fs, os

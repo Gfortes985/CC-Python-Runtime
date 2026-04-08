@@ -1,0 +1,19 @@
+{
+  "required": true,
+  "package": "dev.gfortes.ccpython.mixin",
+  "compatibilityLevel": "JAVA_21",
+  "mixins": [
+    "ComputerMixin",
+    "StringUtilMixin",
+    "TextBufferMixin"
+  ],
+  "client": [
+    "client.DirectFixedWidthFontRendererMixin",
+    "client.FixedWidthFontRendererMixin",
+    "client.MonitorBlockEntityRendererMixin",
+    "client.TerminalWidgetMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

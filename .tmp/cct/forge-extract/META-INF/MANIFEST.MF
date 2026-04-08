@@ -1,0 +1,8 @@
+Manifest-Version: 1.0
+Specification-Title: computercraft
+Specification-Vendor: SquidDev
+Specification-Version: 1
+Implementation-Title: cctweaked-forge
+Implementation-Version: 1.117.1
+Implementation-Vendor: SquidDev
+
