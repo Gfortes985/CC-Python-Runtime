@@ -4,6 +4,7 @@ import com.mojang.logging.LogUtils;
 import dan200.computercraft.api.ComputerCraftAPI;
 import dev.gfortes.ccpython.api.PythonLuaApi;
 import dev.gfortes.ccpython.config.CCPythonConfig;
+import dev.gfortes.ccpython.monitor.MonitorGraphicsManager;
 import dev.gfortes.ccpython.network.PacketHandler;
 import dev.gfortes.ccpython.runtime.SandboxManager;
 import dev.gfortes.ccpython.runtime.PythonRuntimeManager;
@@ -41,23 +42,27 @@ public final class CCPythonMod {
 
     private void onServerStopping(ServerStoppingEvent event) {
         PythonRuntimeManager.getInstance().shutdownServer(event.getServer());
+        MonitorGraphicsManager.getInstance().shutdownServer(event.getServer());
     }
 
     private void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {
         if (event.getEntity() instanceof net.minecraft.server.level.ServerPlayer player) {
             PythonRuntimeManager.getInstance().syncPlayer(player);
+            MonitorGraphicsManager.getInstance().syncPlayer(player);
         }
     }
 
     private void onPlayerRespawn(PlayerEvent.PlayerRespawnEvent event) {
         if (event.getEntity() instanceof net.minecraft.server.level.ServerPlayer player) {
             PythonRuntimeManager.getInstance().syncPlayer(player);
+            MonitorGraphicsManager.getInstance().syncPlayer(player);
         }
     }
 
     private void onPlayerChangedDimension(PlayerEvent.PlayerChangedDimensionEvent event) {
         if (event.getEntity() instanceof net.minecraft.server.level.ServerPlayer player) {
             PythonRuntimeManager.getInstance().syncPlayer(player);
+            MonitorGraphicsManager.getInstance().syncPlayer(player);
         }
     }
 }

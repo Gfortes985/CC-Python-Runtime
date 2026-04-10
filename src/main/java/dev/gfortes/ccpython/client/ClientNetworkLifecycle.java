@@ -1,6 +1,7 @@
 package dev.gfortes.ccpython.client;
 
 import dev.gfortes.ccpython.CCPythonMod;
+import dev.gfortes.ccpython.client.ClientMonitorGraphicsState;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
@@ -14,5 +15,6 @@ public final class ClientNetworkLifecycle {
     @SubscribeEvent
     public static void onLoggingOut(ClientPlayerNetworkEvent.LoggingOut event) {
         ClientPythonRuntimeState.clearAll();
+        ClientMonitorGraphicsState.clearAll();
     }
 }

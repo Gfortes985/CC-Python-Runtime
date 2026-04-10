@@ -1,92 +1,92 @@
-# Architecture
+# Архитектура
 
-## 1. Runtime choice
+## 1. Выбор runtime
 
-The project uses `GraalPy` embedded through `org.graalvm.python:python-embedding`.
+Проект использует `GraalPy`, встроенный через `org.graalvm.python:python-embedding`.
 
-Why this choice:
+Почему выбран именно он:
 
-- `Jython` is effectively locked to Python 2 and does not match the target language model.
-- `JNI + CPython` would violate the no-external-runtime goal and would make sandboxing and multiplayer hosting much harder.
-- `GraalPy` keeps execution inside the JVM, works with Java 21, can deny host class lookup, IO, process creation and thread creation, and fits the server-only architecture.
+- `Jython` фактически застрял на Python 2 и не подходит под целевую языковую модель.
+- `JNI + CPython` нарушил бы требование не использовать внешний runtime и заметно усложнил бы sandboxing и multiplayer-hosting.
+- `GraalPy` держит выполнение внутри JVM, работает с Java 21, умеет запрещать host class lookup, IO, создание процессов и потоков, и хорошо ложится на server-only архитектуру.
 
-## 2. Execution model
+## 2. Модель выполнения
 
-The execution stack is intentionally split:
+Стек выполнения намеренно разделён:
 
-1. `python.lua` is a normal CraftOS program.
-2. It asks the Java API `ccpython.start(...)` to create a server-side Python process.
-3. `PythonProcess` runs the GraalPy context on a dedicated executor thread.
-4. Whenever Python code needs a CC API, the runtime emits a host-call action.
-5. `ccpython.driver` receives that action and performs the real Lua call inside CraftOS.
-6. The Lua driver resumes the Java process with the return values.
+1. `python.lua` — это обычная программа CraftOS.
+2. Она просит Java API `ccpython.start(...)` создать серверный Python process.
+3. `PythonProcess` запускает GraalPy context на выделенном executor thread.
+4. Когда Python-коду нужен API `CC`, runtime выпускает host-call action.
+5. Нативный backend или bridge-слой выполняет соответствующий вызов.
+6. Затем Java process продолжает выполнение с полученными значениями.
 
-This keeps Minecraft's main server thread unblocked while preserving CraftOS semantics and multiplayer behavior.
+Это позволяет не блокировать основной серверный поток Minecraft и при этом сохранять семантику CraftOS и корректное поведение в мультиплеере.
 
-## 3. Event and coroutine model
+## 3. Модель событий и coroutine
 
-Python does not run on the client and does not talk to Minecraft packets directly for terminal output. Instead:
+Python не выполняется на клиенте и не разговаривает с Minecraft packets напрямую ради вывода терминала. Вместо этого:
 
-- Python calls `os.pull_event()`, `sleep()`, `rednet.receive()` and turtle functions through the Lua bridge.
-- Those Lua functions yield naturally inside CC: Tweaked.
-- The Java runtime waits on a `CompletableFuture` until the Lua driver sends results back.
-- `CoroutineAdapter` converts the Java process state into `MethodResult.pullEventRaw(...)` waits so Ctrl+T and CraftOS lifecycle rules continue to work.
+- Python использует `os.pull_event()`, `sleep()`, `rednet.receive()` и другие ожидающие операции через серверный runtime.
+- Эти операции ожидают события в cooperative-модели, совместимой с поведением CraftOS.
+- Java runtime блокируется на управляемом ожидании, пока не придёт нужное событие или ответ backend-а.
+- Это сохраняет работу `Ctrl+T`, lifecycle semantics компьютера и ожидаемое поведение программ внутри `CC: Tweaked`.
 
-## 4. Networking
+## 4. Сеть
 
-Terminal synchronization:
+Синхронизация терминала:
 
-- reused from CC: Tweaked directly
-- this is the correct multiplayer behavior because the terminal already has robust server/client sync
+- переиспользуется напрямую из `CC: Tweaked`
+- это и есть правильное multiplayer-поведение, потому что терминал уже имеет надёжную server/client sync-модель
 
-Custom Python payloads:
+Собственные Python payloads:
 
 - `PythonRuntimeStatePayload`
 - `PythonRuntimeErrorPayload`
 
-Those payloads provide metadata, tracebacks and room for future client-side overlays without moving Python execution to the client.
+Эти payloads дают metadata, traceback-и и запас для будущих клиентских overlay-слоёв, не перенося выполнение Python на клиент.
 
 ## 5. Sandboxing
 
-The sandbox has multiple layers:
+Sandbox состоит из нескольких слоёв:
 
-- no client execution
-- no direct JVM access
-- no direct host class lookup
-- no host IO
-- no host process creation
-- no host thread creation
+- никакого client-side execution
+- никакого прямого доступа к JVM
+- никакого прямого host class lookup
+- никакого host IO
+- никакого host process creation
+- никакого host thread creation
 - curated import allowlist
-- blocked dangerous modules (`socket`, `ssl`, `subprocess`, `threading`, `polyglot`, etc.)
-- best-effort Graal statement limit
-- watchdog timeout for CPU-bound loops
-- soft payload/source budget for memory accounting
+- блокировка опасных модулей (`socket`, `ssl`, `subprocess`, `threading`, `polyglot` и т.д.)
+- best-effort лимит по Graal statements
+- watchdog timeout для CPU-bound циклов
+- soft payload/source budget для memory accounting
 
-Important caveat:
+Важная оговорка:
 
-- hard heap isolation depends on the stricter Graal sandbox options being available at runtime
-- when they are unavailable, the mod logs a warning and continues with soft accounting + watchdog protection
+- жёсткая heap isolation зависит от наличия более строгих Graal sandbox options во время выполнения
+- если они недоступны, мод пишет warning в лог и продолжает работу с soft-accounting + watchdog protection
 
-## 6. Project components
+## 6. Компоненты проекта
 
-- `PythonRuntimeManager`: per-server registry of computer contexts
-- `PythonComputerContext`: per-computer process ownership
+- `PythonRuntimeManager`: per-server реестр computer contexts
+- `PythonComputerContext`: владение процессами на уровне одного компьютера
 - `PythonExecutionService`: executor pool + watchdog
-- `PythonEventLoop`: blocks the GraalPy worker until Lua responds
-- `PythonAPIBindings`: installs the host bridge and Python bootstrap
-- `SandboxManager`: builds the GraalPy context with restricted access
-- `FileSystemAdapter`: normalizes CraftOS paths and search paths
-- `CoroutineAdapter`: translates runtime wakeups into CC cooperative waits
-- `NetworkSyncManager`: pushes runtime state/errors to clients
-- `ClientTerminalSync`: documents the split between native CC terminal sync and Python metadata sync
-- `PacketHandler`: registers NeoForge payload codecs/handlers
+- `PythonEventLoop`: удерживает GraalPy worker, пока не придёт ответ
+- `PythonAPIBindings`: устанавливает host bridge и Python bootstrap
+- `SandboxManager`: строит GraalPy context с ограниченным доступом
+- `FileSystemAdapter`: нормализует CraftOS paths и search paths
+- `CoroutineAdapter`: переводит runtime wakeups в cooperative waits `CC`
+- `NetworkSyncManager`: отправляет runtime state/errors клиентам
+- `ClientTerminalSync`: отражает разделение между родной terminal sync `CC` и Python metadata sync
+- `PacketHandler`: регистрирует NeoForge payload codecs/handlers
 
-## 7. Remaining work
+## 7. Что ещё предстоит
 
-The repository intentionally leaves room for future iterations:
+В репозитории намеренно оставлено место для следующих итераций:
 
-- richer filesystem compatibility for binary handles
-- persistent per-computer REPL history
-- full startup.py autorun integration
-- client overlays for runtime state in terminal GUIs
-- deeper test coverage with dedicated server and multishell scenarios
+- более богатая совместимость файловой системы для бинарных handles
+- постоянная per-computer история REPL
+- полноценная интеграция `startup.py` / autorun
+- клиентские overlays для runtime state внутри terminal GUI
+- более глубокое тестовое покрытие для dedicated server и multishell-сценариев

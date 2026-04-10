@@ -6,6 +6,7 @@ import dan200.computercraft.api.peripheral.IPeripheral;
 import dan200.computercraft.core.filesystem.FileSystem;
 import dan200.computercraft.core.filesystem.FileSystemException;
 import dan200.computercraft.core.filesystem.FileSystemWrapper;
+import dev.gfortes.ccpython.monitor.ManagedImage;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -45,6 +46,7 @@ final class NativeProcessResources {
     );
 
     private final Map<String, NativeFileHandle> fileHandles = new HashMap<>();
+    private final Map<String, ManagedImage> imageHandles = new HashMap<>();
     private final Map<String, IPeripheral> attachedPeripherals = new HashMap<>();
     private int nextHandleId = 1;
 
@@ -118,6 +120,23 @@ final class NativeProcessResources {
         attachedPeripherals.put(side, peripheral);
     }
 
+    String registerImage(ManagedImage image) {
+        var token = Integer.toString(nextHandleId++);
+        imageHandles.put(token, image);
+        return token;
+    }
+
+    ManagedImage image(String token) throws LuaException {
+        var image = imageHandles.get(token);
+        if (image == null) throw new LuaException("Unknown Python image handle '" + token + "'");
+        return image;
+    }
+
+    void closeImage(String token) throws LuaException {
+        image(token);
+        imageHandles.remove(token);
+    }
+
     void closeAll(IComputerAccess computer) {
         for (var handle : fileHandles.values()) {
             try {
@@ -126,6 +145,7 @@ final class NativeProcessResources {
             }
         }
         fileHandles.clear();
+        imageHandles.clear();
 
         var detached = new HashSet<IPeripheral>(attachedPeripherals.values());
         attachedPeripherals.clear();

@@ -1835,6 +1835,100 @@ class _RednetModule(_types.ModuleType):
         return message
 
 
+def _monitor_side(target):
+    if isinstance(target, str):
+        return target
+    side = getattr(target, "_side", None)
+    if isinstance(side, str):
+        return side
+    raise TypeError("monitor target must be a side string or wrapped monitor peripheral")
+
+
+class _ImageHandle:
+    def __init__(self, token):
+        self._token = str(token)
+
+    def __repr__(self):
+        info = self.info()
+        return f"<cc image {info['width']}x{info['height']}>"
+
+    def info(self):
+        return _call("__image", "info", self._token)
+
+    @property
+    def width(self):
+        return int(self.info()["width"])
+
+    @property
+    def height(self):
+        return int(self.info()["height"])
+
+    def size(self):
+        info = self.info()
+        return int(info["width"]), int(info["height"])
+
+    def resize(self, width, height, resample="bilinear"):
+        return _ImageHandle(_call("__image", "resize", self._token, int(width), int(height), resample))
+
+    def quantize_monitor(self, dither=True):
+        return _ImageHandle(_call("__image", "quantize_monitor", self._token, bool(dither)))
+
+    def close(self):
+        _call("__image", "close", self._token)
+
+
+class _ImageModule(_types.ModuleType):
+    def __init__(self):
+        super().__init__("image")
+
+    def __repr__(self):
+        return "<cc module 'image'>"
+
+    def open(self, path):
+        return _ImageHandle(_call("__image", "open", path))
+
+    def load_url(self, url, headers=None, timeout=10):
+        return _ImageHandle(_call("__image", "load_url", url, headers or {}, int(timeout)))
+
+    def loadUrl(self, url, headers=None, timeout=10):
+        return self.load_url(url, headers, timeout)
+
+
+class _MonitorGraphicsModule(_types.ModuleType):
+    def __init__(self):
+        super().__init__("monitorgfx")
+
+    def __repr__(self):
+        return "<cc module 'monitorgfx'>"
+
+    def size(self, target):
+        width, height = _call("__monitor_gfx", "size", _monitor_side(target))
+        return int(width), int(height)
+
+    def clear(self, target, color=colors.black):
+        return _call("__monitor_gfx", "clear", _monitor_side(target), int(color))
+
+    def disable(self, target):
+        return _call("__monitor_gfx", "disable", _monitor_side(target))
+
+    def set_pixel(self, target, x, y, color=colors.black):
+        return _call("__monitor_gfx", "set_pixel", _monitor_side(target), int(x), int(y), int(color))
+
+    def setPixel(self, target, x, y, color=colors.black):
+        return self.set_pixel(target, x, y, color)
+
+    def draw(self, target, image, x=1, y=1, clear=False):
+        if not isinstance(image, _ImageHandle):
+            raise TypeError("image must be created by cc.image")
+        return _call("__monitor_gfx", "draw_image", _monitor_side(target), image._token, int(x), int(y), bool(clear))
+
+    def draw_image(self, target, image, x=1, y=1, clear=False):
+        return self.draw(target, image, x, y, clear)
+
+    def drawImage(self, target, image, x=1, y=1, clear=False):
+        return self.draw(target, image, x, y, clear)
+
+
 def _next_parallel_event():
     if _SYNTHETIC_EVENTS:
         return _SYNTHETIC_EVENTS.pop(0)
@@ -2128,6 +2222,8 @@ term = _LuaProxyModule("term", "term")
 turtle = _LuaProxyModule("turtle", "turtle")
 redstone = _LuaProxyModule("redstone", "redstone")
 rednet = _RednetModule("rednet")
+image = _ImageModule()
+monitorgfx = _MonitorGraphicsModule()
 parallel = _ParallelModule()
 fs = _FSModule("fs", "fs")
 os = _OSModule("os", "os")
@@ -2165,6 +2261,8 @@ _BRIDGE_MODULES = {
     "turtle": turtle,
     "redstone": redstone,
     "rednet": rednet,
+    "image": image,
+    "monitorgfx": monitorgfx,
     "parallel": parallel,
     "fs": fs,
     "os": os,
@@ -2182,6 +2280,8 @@ _CC_NAMESPACE_EXPORTS = {
     "turtle": turtle,
     "redstone": redstone,
     "rednet": rednet,
+    "image": image,
+    "monitorgfx": monitorgfx,
     "parallel": parallel,
     "fs": fs,
     "os": os,
@@ -2356,6 +2456,8 @@ def help(topic=None):
         print("  help(cc.fs)         file helpers")
         print("  help(cc.peripheral) peripheral helpers")
         print("  help(cc.rednet)     rednet helpers")
+        print("  help(cc.image)      image loading and processing")
+        print("  help(cc.monitorgfx) hi-res monitor graphics")
         print("  help(cc.colors)     colour constants and helpers")
         print("  help(cc.keys)       keyboard constants")
         print("  help(cc.paintutils) drawing helpers")
@@ -2373,6 +2475,8 @@ def help(topic=None):
         print("  cc.term         terminal helpers")
         print("  cc.peripheral   peripheral discovery and wrappers")
         print("  cc.rednet       networking helpers")
+        print("  cc.image        image loading and processing helpers")
+        print("  cc.monitorgfx   hi-res monitor graphics helpers")
         print("  cc.redstone     redstone helpers")
         print("  cc.colors       colour constants and bitmask helpers")
         print("  cc.keys         keyboard constants")
@@ -2404,6 +2508,18 @@ def help(topic=None):
         print("  broadcast(message, protocol=None)")
         print("  receive(timeout=None, protocol=None)")
         print("  send_json(...), broadcast_json(...), receive_json(...)")
+        return None
+    if module_name in ("image", "cc.image"):
+        print("cc.image helpers")
+        print("  open(path)")
+        print("  load_url(url, headers=None, timeout=10)")
+        print("  image.size(), image.resize(width, height), image.quantize_monitor(dither=True)")
+        return None
+    if module_name in ("monitorgfx", "cc.monitorgfx"):
+        print("cc.monitorgfx helpers")
+        print("  size(target), clear(target, color=colors.black), disable(target)")
+        print("  set_pixel(target, x, y, color)")
+        print("  draw(target, image, x=1, y=1, clear=False)")
         return None
     if module_name in ("colors", "colours", "cc.colors", "cc.colours"):
         print("cc.colors helpers")
@@ -2524,6 +2640,8 @@ def _base_scope():
         "turtle": turtle,
         "redstone": redstone,
         "rednet": rednet,
+        "image": image,
+        "monitorgfx": monitorgfx,
         "parallel": parallel,
         "fs": fs,
         "os": os,

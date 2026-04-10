@@ -4,6 +4,8 @@ import dev.gfortes.ccpython.network.payload.PythonRuntimeClearPayload;
 import dev.gfortes.ccpython.network.payload.PythonRuntimeErrorPayload;
 import dev.gfortes.ccpython.network.payload.PythonRuntimeResetPayload;
 import dev.gfortes.ccpython.network.payload.PythonRuntimeStatePayload;
+import dev.gfortes.ccpython.network.payload.MonitorGraphicsClearPayload;
+import dev.gfortes.ccpython.network.payload.MonitorGraphicsFramePayload;
 import net.neoforged.neoforge.network.event.RegisterPayloadHandlersEvent;
 import net.neoforged.neoforge.network.registration.PayloadRegistrar;
 
@@ -35,6 +37,16 @@ public final class PacketHandler {
             PythonRuntimeResetPayload.TYPE,
             PythonRuntimeResetPayload.STREAM_CODEC,
             PythonPayloadHandler::handleReset
+        );
+        registrar.playToClient(
+            MonitorGraphicsFramePayload.TYPE,
+            MonitorGraphicsFramePayload.STREAM_CODEC,
+            PythonPayloadHandler::handleMonitorFrame
+        );
+        registrar.playToClient(
+            MonitorGraphicsClearPayload.TYPE,
+            MonitorGraphicsClearPayload.STREAM_CODEC,
+            PythonPayloadHandler::handleMonitorClear
         );
     }
 }

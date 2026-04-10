@@ -1,6 +1,9 @@
 package dev.gfortes.ccpython.network;
 
 import dev.gfortes.ccpython.client.ClientPythonRuntimeState;
+import dev.gfortes.ccpython.client.ClientMonitorGraphicsState;
+import dev.gfortes.ccpython.network.payload.MonitorGraphicsClearPayload;
+import dev.gfortes.ccpython.network.payload.MonitorGraphicsFramePayload;
 import dev.gfortes.ccpython.network.payload.PythonRuntimeClearPayload;
 import dev.gfortes.ccpython.network.payload.PythonRuntimeErrorPayload;
 import dev.gfortes.ccpython.network.payload.PythonRuntimeResetPayload;
@@ -34,6 +37,18 @@ public final class PythonPayloadHandler {
     public static void handleReset(PythonRuntimeResetPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (FMLEnvironment.dist == Dist.CLIENT) ClientPythonRuntimeState.clearAll();
+        });
+    }
+
+    public static void handleMonitorFrame(MonitorGraphicsFramePayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> {
+            if (FMLEnvironment.dist == Dist.CLIENT) ClientMonitorGraphicsState.apply(payload);
+        });
+    }
+
+    public static void handleMonitorClear(MonitorGraphicsClearPayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> {
+            if (FMLEnvironment.dist == Dist.CLIENT) ClientMonitorGraphicsState.apply(payload);
         });
     }
 }

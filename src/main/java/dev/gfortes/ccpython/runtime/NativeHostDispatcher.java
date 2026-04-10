@@ -20,9 +20,16 @@ import dan200.computercraft.core.terminal.Terminal;
 import dan200.computercraft.shared.computer.blocks.AbstractComputerBlockEntity;
 import dan200.computercraft.shared.computer.core.ServerComputer;
 import dan200.computercraft.shared.computer.core.ServerContext;
+import dan200.computercraft.shared.peripheral.monitor.MonitorBlockEntity;
+import dan200.computercraft.shared.peripheral.monitor.MonitorPeripheral;
 import dev.gfortes.ccpython.config.CCPythonConfig;
+import dev.gfortes.ccpython.monitor.ManagedImage;
+import dev.gfortes.ccpython.monitor.MonitorGraphicsManager;
+import dev.gfortes.ccpython.monitor.MonitorPalette;
 import dev.gfortes.ccpython.util.LuaValues;
 import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
@@ -55,6 +62,8 @@ final class NativeHostDispatcher {
             return switch (module) {
                 case "__fs" -> dispatchSpecialFs(access, method, arguments);
                 case "__fs_handle" -> dispatchFileHandle(access, process, method, arguments);
+                case "__image" -> dispatchImage(access, process, method, arguments);
+                case "__monitor_gfx" -> dispatchMonitorGraphics(access, process, method, arguments);
                 case "__global" -> dispatchGlobals(access, process, method, arguments);
                 case "fs" -> dispatchFs(access, method, arguments);
                 case "term" -> dispatchTerm(access, method, arguments);
@@ -126,6 +135,78 @@ final class NativeHostDispatcher {
             case "read" -> success(NativeLineReader.read(process, access.terminal()));
             case "sleep" -> {
                 sleep(access, process, doubleArg(arguments, 0));
+                yield success();
+            }
+            default -> null;
+        };
+    }
+
+    private static PythonActionResponse dispatchImage(NativeComputerAccess access, PythonProcess process, String method, List<Object> arguments) throws Exception {
+        var resources = process.nativeResources();
+        return switch (method) {
+            case "open" -> {
+                var bytes = readAllBytes(access.fileSystem(), stringArg(arguments, 0));
+                yield success(resources.registerImage(ManagedImage.fromBytes(bytes)));
+            }
+            case "loadUrl" -> {
+                var image = ManagedImage.fromUrl(
+                    stringArg(arguments, 0),
+                    stringMapArg(arguments, 1),
+                    intArg(arguments, 2)
+                );
+                yield success(resources.registerImage(image));
+            }
+            case "info" -> {
+                var image = resources.image(stringArg(arguments, 0));
+                var info = new LinkedHashMap<String, Object>();
+                info.put("width", image.width());
+                info.put("height", image.height());
+                yield success(info);
+            }
+            case "resize" -> {
+                var image = resources.image(stringArg(arguments, 0));
+                var resized = image.resize(intArg(arguments, 1), intArg(arguments, 2), stringArg(arguments, 3, "bilinear"));
+                yield success(resources.registerImage(resized));
+            }
+            case "quantizeMonitor" -> {
+                var image = resources.image(stringArg(arguments, 0));
+                var quantized = image.quantizeToMonitorPalette(boolArg(arguments, 1, true));
+                yield success(resources.registerImage(quantized));
+            }
+            case "close" -> {
+                resources.closeImage(stringArg(arguments, 0));
+                yield success();
+            }
+            default -> null;
+        };
+    }
+
+    private static PythonActionResponse dispatchMonitorGraphics(NativeComputerAccess access, PythonProcess process, String method, List<Object> arguments) throws Exception {
+        var monitor = requireMonitor(access, process, stringArg(arguments, 0));
+        var manager = MonitorGraphicsManager.getInstance();
+        return switch (method) {
+            case "size" -> success(manager.size(monitor));
+            case "disable" -> {
+                manager.disable(monitor);
+                yield success();
+            }
+            case "clear" -> {
+                manager.clear(monitor, colorArg(arguments, 1, MonitorPalette.argb(15)));
+                yield success();
+            }
+            case "setPixel" -> {
+                manager.setPixel(monitor, intArg(arguments, 1), intArg(arguments, 2), colorArg(arguments, 3, MonitorPalette.argb(15)));
+                yield success();
+            }
+            case "drawImage" -> {
+                var image = process.nativeResources().image(stringArg(arguments, 1));
+                manager.drawImage(
+                    monitor,
+                    image,
+                    intArg(arguments, 2),
+                    intArg(arguments, 3),
+                    boolArg(arguments, 4, false)
+                );
                 yield success();
             }
             default -> null;
@@ -418,6 +499,19 @@ final class NativeHostDispatcher {
         return access.environment().getPeripheral(side);
     }
 
+    private static MonitorBlockEntity requireMonitor(NativeComputerAccess access, PythonProcess process, String sideName) throws LuaException {
+        var peripheral = getPeripheral(access, sideName);
+        if (!(peripheral instanceof MonitorPeripheral monitorPeripheral)) {
+            throw new LuaException("No monitor attached on side '" + sideName + "'");
+        }
+        process.nativeResources().ensurePeripheralAttached(sideName, peripheral, access.computerSystem());
+        Object target = monitorPeripheral.getTarget();
+        if (!(target instanceof MonitorBlockEntity monitor)) {
+            throw new LuaException("Failed to resolve the monitor target for side '" + sideName + "'");
+        }
+        return monitor;
+    }
+
     private static Map<String, Object> resolveImport(FileSystem fileSystem, String moduleName, List<String> searchPaths) throws FileSystemException {
         var relative = moduleName.replace('.', '/');
 
@@ -453,6 +547,25 @@ final class NativeHostDispatcher {
         }
 
         return null;
+    }
+
+    private static byte[] readAllBytes(FileSystem fileSystem, String path) throws IOException, FileSystemException {
+        try (var wrapper = fileSystem.openForRead(path)) {
+            InputStream stream = java.nio.channels.Channels.newInputStream(wrapper.get());
+            var output = new ByteArrayOutputStream();
+            stream.transferTo(output);
+            return output.toByteArray();
+        }
+    }
+
+    private static Map<String, String> stringMapArg(List<Object> arguments, int index) {
+        if (index >= arguments.size() || !(arguments.get(index) instanceof Map<?, ?> map)) return Map.of();
+        var result = new LinkedHashMap<String, String>();
+        for (var entry : map.entrySet()) {
+            if (entry.getKey() == null || entry.getValue() == null) continue;
+            result.put(entry.getKey().toString(), entry.getValue().toString());
+        }
+        return result;
     }
 
     private static Object readAll(FileSystem fileSystem, String path) throws Exception {
@@ -589,6 +702,22 @@ final class NativeHostDispatcher {
             throw new LuaException("Expected boolean argument at index " + index);
         }
         return bool;
+    }
+
+    private static boolean boolArg(List<Object> arguments, int index, boolean fallback) throws LuaException {
+        if (index >= arguments.size() || arguments.get(index) == null) return fallback;
+        if (!(arguments.get(index) instanceof Boolean bool)) {
+            throw new LuaException("Expected boolean argument at index " + index);
+        }
+        return bool;
+    }
+
+    private static int colorArg(List<Object> arguments, int index, int fallback) throws LuaException {
+        if (index >= arguments.size() || arguments.get(index) == null) return fallback;
+        if (!(arguments.get(index) instanceof Number number)) {
+            throw new LuaException("Expected numeric colour argument at index " + index);
+        }
+        return MonitorPalette.coerceArgb(number.longValue());
     }
 
     private static Optional<String> optionalString(List<Object> arguments, int index) {

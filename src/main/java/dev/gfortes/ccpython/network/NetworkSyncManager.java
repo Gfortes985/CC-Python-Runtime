@@ -1,6 +1,10 @@
 package dev.gfortes.ccpython.network;
 
 import dev.gfortes.ccpython.CCPythonMod;
+import dev.gfortes.ccpython.monitor.MonitorGraphicsFrame;
+import dev.gfortes.ccpython.monitor.MonitorGraphicsKey;
+import dev.gfortes.ccpython.network.payload.MonitorGraphicsClearPayload;
+import dev.gfortes.ccpython.network.payload.MonitorGraphicsFramePayload;
 import dev.gfortes.ccpython.network.payload.PythonRuntimeClearPayload;
 import dev.gfortes.ccpython.network.payload.PythonRuntimeErrorPayload;
 import dev.gfortes.ccpython.network.payload.PythonRuntimeResetPayload;
@@ -41,6 +45,15 @@ public final class NetworkSyncManager {
         enqueue(level, () -> broadcast(level, payload));
     }
 
+    public static void broadcastMonitorFrame(MonitorGraphicsFrame frame) {
+        var payload = MonitorGraphicsFramePayload.fromFrame(frame);
+        enqueue(frame.key().dimension(), payload);
+    }
+
+    public static void broadcastMonitorClear(ServerLevel level, MonitorGraphicsKey key) {
+        enqueue(level, () -> broadcast(level, new MonitorGraphicsClearPayload(key)));
+    }
+
     public static void syncPlayer(ServerPlayer player, Collection<PythonStatusSnapshot> snapshots) {
         if (player == null || player.server == null) return;
 
@@ -56,6 +69,20 @@ public final class NetworkSyncManager {
         });
     }
 
+    public static void syncMonitorFrames(ServerPlayer player, Collection<MonitorGraphicsFrame> frames) {
+        if (player == null || player.server == null) return;
+
+        player.server.execute(() -> {
+            try {
+                for (var frame : frames) {
+                    PacketDistributor.sendToPlayer(player, MonitorGraphicsFramePayload.fromFrame(frame));
+                }
+            } catch (RuntimeException exception) {
+                CCPythonMod.LOGGER.warn("Failed to synchronize monitor graphics state to player {}.", player.getGameProfile().getName(), exception);
+            }
+        });
+    }
+
     private static void enqueue(ServerLevel level, Runnable action) {
         if (level == null || level.getServer() == null) return;
 
@@ -64,6 +91,23 @@ public final class NetworkSyncManager {
                 action.run();
             } catch (RuntimeException exception) {
                 CCPythonMod.LOGGER.warn("Failed to synchronize Python runtime state to clients.", exception);
+            }
+        });
+    }
+
+    private static void enqueue(String dimensionId, net.minecraft.network.protocol.common.custom.CustomPacketPayload payload) {
+        var server = net.neoforged.neoforge.server.ServerLifecycleHooks.getCurrentServer();
+        if (server == null) return;
+
+        server.execute(() -> {
+            try {
+                for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+                    if (player.level().dimension().location().toString().equals(dimensionId)) {
+                        PacketDistributor.sendToPlayer(player, payload);
+                    }
+                }
+            } catch (RuntimeException exception) {
+                CCPythonMod.LOGGER.warn("Failed to synchronize monitor graphics state to clients.", exception);
             }
         });
     }
