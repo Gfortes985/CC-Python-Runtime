@@ -6,14 +6,14 @@ public record MonitorGraphicsFrame(
     int blockHeight,
     int pixelWidth,
     int pixelHeight,
-    byte[] pixels
+    int[] pixels
 ) {
     public MonitorGraphicsFrame {
-        pixels = pixels == null ? new byte[0] : pixels.clone();
+        pixels = pixels == null ? new int[0] : pixels.clone();
     }
 
     @Override
-    public byte[] pixels() {
+    public int[] pixels() {
         return pixels.clone();
     }
 }

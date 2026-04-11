@@ -1,6 +1,5 @@
 package dev.gfortes.ccpython.runtime;
 
-import dan200.computercraft.api.lua.Coerced;
 import dan200.computercraft.api.lua.ILuaContext;
 import dan200.computercraft.api.lua.LuaException;
 import dan200.computercraft.api.lua.LuaTask;
@@ -11,17 +10,16 @@ import dan200.computercraft.api.peripheral.IPeripheral;
 import dan200.computercraft.core.apis.IAPIEnvironment;
 import dan200.computercraft.core.apis.OSAPI;
 import dan200.computercraft.core.apis.RedstoneAPI;
-import dan200.computercraft.core.apis.TermAPI;
 import dan200.computercraft.core.computer.Computer;
 import dan200.computercraft.core.computer.ComputerSide;
 import dan200.computercraft.core.filesystem.FileSystem;
 import dan200.computercraft.core.filesystem.FileSystemException;
-import dan200.computercraft.core.terminal.Terminal;
 import dan200.computercraft.shared.computer.blocks.AbstractComputerBlockEntity;
 import dan200.computercraft.shared.computer.core.ServerComputer;
 import dan200.computercraft.shared.computer.core.ServerContext;
 import dan200.computercraft.shared.peripheral.monitor.MonitorBlockEntity;
 import dan200.computercraft.shared.peripheral.monitor.MonitorPeripheral;
+import dev.gfortes.ccpython.CCPythonMod;
 import dev.gfortes.ccpython.config.CCPythonConfig;
 import dev.gfortes.ccpython.monitor.ManagedImage;
 import dev.gfortes.ccpython.monitor.MonitorGraphicsManager;
@@ -45,6 +43,8 @@ import java.util.concurrent.ExecutionException;
 
 final class NativeHostDispatcher {
     private static final Field INNER_COMPUTER_FIELD = findInnerComputerField();
+    private static final Field COMPUTER_SYSTEM_SERVER_COMPUTER_FIELD = findComputerSystemField("computer");
+    private static final Field COMPUTER_SYSTEM_ENVIRONMENT_FIELD = findComputerSystemField("environment");
 
     private NativeHostDispatcher() {
     }
@@ -128,11 +128,6 @@ final class NativeHostDispatcher {
 
     private static PythonActionResponse dispatchGlobals(NativeComputerAccess access, PythonProcess process, String method, List<Object> arguments) throws Exception {
         return switch (method) {
-            case "write" -> {
-                access.terminal().write(stringArg(arguments, 0, ""));
-                yield success();
-            }
-            case "read" -> success(NativeLineReader.read(process, access.terminal()));
             case "sleep" -> {
                 sleep(access, process, doubleArg(arguments, 0));
                 yield success();
@@ -145,10 +140,15 @@ final class NativeHostDispatcher {
         var resources = process.nativeResources();
         return switch (method) {
             case "open" -> {
-                var bytes = readAllBytes(access.fileSystem(), stringArg(arguments, 0));
-                yield success(resources.registerImage(ManagedImage.fromBytes(bytes)));
+                var path = stringArg(arguments, 0);
+                CCPythonMod.LOGGER.info("Opening Python image from '{}'.", path);
+                var bytes = readAllBytes(access.fileSystem(), path);
+                CCPythonMod.LOGGER.info("Read {} bytes for Python image '{}'.", bytes.length, path);
+                var token = resources.registerImage(ManagedImage.fromBytes(bytes));
+                CCPythonMod.LOGGER.info("Registered Python image '{}' as handle {}.", path, token);
+                yield success(token);
             }
-            case "loadUrl" -> {
+            case "loadUrl", "loadURL" -> {
                 var image = ManagedImage.fromUrl(
                     stringArg(arguments, 0),
                     stringMapArg(arguments, 1),
@@ -157,10 +157,13 @@ final class NativeHostDispatcher {
                 yield success(resources.registerImage(image));
             }
             case "info" -> {
-                var image = resources.image(stringArg(arguments, 0));
+                var token = stringArg(arguments, 0);
+                CCPythonMod.LOGGER.info("Querying Python image info for handle {}.", token);
+                var image = resources.image(token);
                 var info = new LinkedHashMap<String, Object>();
                 info.put("width", image.width());
                 info.put("height", image.height());
+                CCPythonMod.LOGGER.info("Python image handle {} is {}x{}.", token, image.width(), image.height());
                 yield success(info);
             }
             case "resize" -> {
@@ -249,63 +252,7 @@ final class NativeHostDispatcher {
     }
 
     private static PythonActionResponse dispatchTerm(NativeComputerAccess access, String method, List<Object> arguments) throws Exception {
-        var terminal = access.terminal();
-        var api = new TermAPI(access.environment());
-        return switch (method) {
-            case "write" -> {
-                api.write(new Coerced<>(stringArg(arguments, 0, "")));
-                yield success();
-            }
-            case "scroll" -> {
-                api.scroll(intArg(arguments, 0));
-                yield success();
-            }
-            case "getCursorPos" -> success(api.getCursorPos());
-            case "setCursorPos" -> {
-                api.setCursorPos(intArg(arguments, 0), intArg(arguments, 1));
-                yield success();
-            }
-            case "getCursorBlink" -> success(api.getCursorBlink());
-            case "setCursorBlink" -> {
-                api.setCursorBlink(boolArg(arguments, 0));
-                yield success();
-            }
-            case "getSize" -> success(api.getSize());
-            case "clear" -> {
-                api.clear();
-                yield success();
-            }
-            case "clearLine" -> {
-                api.clearLine();
-                yield success();
-            }
-            case "getTextColour", "getTextColor" -> success(api.getTextColour());
-            case "setTextColour", "setTextColor" -> {
-                api.setTextColour(intArg(arguments, 0));
-                yield success();
-            }
-            case "getBackgroundColour", "getBackgroundColor" -> success(api.getBackgroundColour());
-            case "setBackgroundColour", "setBackgroundColor" -> {
-                api.setBackgroundColour(intArg(arguments, 0));
-                yield success();
-            }
-            case "isColour", "isColor" -> success(api.getIsColour());
-            case "blit" -> {
-                terminal.blit(
-                    toByteBuffer(stringArg(arguments, 0, "")),
-                    toByteBuffer(stringArg(arguments, 1, "")),
-                    toByteBuffer(stringArg(arguments, 2, ""))
-                );
-                yield success();
-            }
-            case "setPaletteColour", "setPaletteColor" -> {
-                api.setPaletteColour(new ObjectArguments(arguments));
-                yield success();
-            }
-            case "getPaletteColour", "getPaletteColor" -> success(api.getPaletteColour(intArg(arguments, 0)));
-            case "nativePaletteColour", "nativePaletteColor" -> success(api.nativePaletteColour(intArg(arguments, 0)));
-            default -> null;
-        };
+        return null;
     }
 
     private static PythonActionResponse dispatchOs(NativeComputerAccess access, PythonProcess process, String method, List<Object> arguments) throws Exception {
@@ -731,10 +678,6 @@ final class NativeHostDispatcher {
         return Optional.of(number.longValue());
     }
 
-    private static ByteBuffer toByteBuffer(String value) {
-        return ByteBuffer.wrap(value.getBytes(StandardCharsets.ISO_8859_1));
-    }
-
     private static PythonActionResponse success() {
         return PythonActionResponse.success(List.of());
     }
@@ -770,6 +713,17 @@ final class NativeHostDispatcher {
         }
     }
 
+    private static Field findComputerSystemField(String name) {
+        try {
+            Class<?> klass = Class.forName("dan200.computercraft.shared.computer.core.ComputerSystem");
+            Field field = klass.getDeclaredField(name);
+            field.setAccessible(true);
+            return field;
+        } catch (ReflectiveOperationException exception) {
+            return null;
+        }
+    }
+
     private record NativeComputerAccess(
         IComputerAccess computerSystem,
         ServerComputer serverComputer,
@@ -778,6 +732,23 @@ final class NativeHostDispatcher {
         ServerContext serverContext
     ) {
         static NativeComputerAccess resolve(dan200.computercraft.api.lua.IComputerSystem computerSystem) throws ReflectiveOperationException {
+            if (COMPUTER_SYSTEM_SERVER_COMPUTER_FIELD != null
+                && COMPUTER_SYSTEM_ENVIRONMENT_FIELD != null
+                && COMPUTER_SYSTEM_SERVER_COMPUTER_FIELD.getDeclaringClass().isInstance(computerSystem)) {
+                var serverComputer = (ServerComputer) COMPUTER_SYSTEM_SERVER_COMPUTER_FIELD.get(computerSystem);
+                var environment = (IAPIEnvironment) COMPUTER_SYSTEM_ENVIRONMENT_FIELD.get(computerSystem);
+                if (serverComputer != null && environment != null) {
+                    var computer = (Computer) INNER_COMPUTER_FIELD.get(serverComputer);
+                    return new NativeComputerAccess(
+                        (IComputerAccess) computerSystem,
+                        serverComputer,
+                        computer,
+                        environment,
+                        ServerContext.get(computerSystem.getLevel().getServer())
+                    );
+                }
+            }
+
             var level = computerSystem.getLevel();
             var blockEntity = level.getBlockEntity(computerSystem.getPosition());
             if (!(blockEntity instanceof AbstractComputerBlockEntity computerBlockEntity)) return null;
@@ -798,10 +769,6 @@ final class NativeHostDispatcher {
 
         FileSystem fileSystem() {
             return environment.getFileSystem();
-        }
-
-        Terminal terminal() {
-            return environment.getTerminal();
         }
     }
 

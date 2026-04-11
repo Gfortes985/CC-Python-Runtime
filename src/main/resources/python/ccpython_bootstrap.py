@@ -1008,7 +1008,10 @@ class _TextutilsModule(_types.ModuleType):
         for char in wrapped:
             if delay > 0:
                 sleep(delay)
-            _call("__global", "write", char)
+            if char == "\n":
+                _terminal_newline()
+            else:
+                term.write(char)
 
     def slowWrite(self, text, rate=None):
         return self.slow_write(text, rate)
@@ -1044,7 +1047,7 @@ class _TextutilsModule(_types.ModuleType):
 
         for line in lines:
             if printed > 0 and remaining_free <= 0 and self._cursor_y() >= height:
-                _call("__global", "write", "Press any key to continue")
+                _terminal_write_text("Press any key to continue")
                 os.pull_event("key")
                 term.clear_line()
                 term.set_cursor_pos(1, height)
@@ -1905,16 +1908,20 @@ class _MonitorGraphicsModule(_types.ModuleType):
         width, height = _call("__monitor_gfx", "size", _monitor_side(target))
         return int(width), int(height)
 
-    def clear(self, target, color=colors.black):
+    def clear(self, target, color=None):
+        if color is None:
+            color = colors.black
         return _call("__monitor_gfx", "clear", _monitor_side(target), int(color))
 
     def disable(self, target):
         return _call("__monitor_gfx", "disable", _monitor_side(target))
 
-    def set_pixel(self, target, x, y, color=colors.black):
+    def set_pixel(self, target, x, y, color=None):
+        if color is None:
+            color = colors.black
         return _call("__monitor_gfx", "set_pixel", _monitor_side(target), int(x), int(y), int(color))
 
-    def setPixel(self, target, x, y, color=colors.black):
+    def setPixel(self, target, x, y, color=None):
         return self.set_pixel(target, x, y, color)
 
     def draw(self, target, image, x=1, y=1, clear=False):
@@ -2395,13 +2402,55 @@ def _safe_import(name, globals=None, locals=None, fromlist=(), level=0):
     raise ImportError("Import '%s' is not available in the CC Python sandbox" % top)
 
 
+def _terminal_newline():
+    _, y_pos = term.get_cursor_pos()
+    _, height = term.get_size()
+    y_pos = int(y_pos)
+    height = int(height)
+    if y_pos >= height:
+        term.scroll(1)
+        y_pos = height
+    else:
+        y_pos += 1
+    term.set_cursor_pos(1, int(y_pos))
+
+
+def _terminal_write_text(text):
+    if text is None:
+        return None
+
+    text = str(text)
+    if not text:
+        return None
+
+    parts = text.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+    for index, part in enumerate(parts):
+        remaining = part
+        while remaining:
+            x_pos, _ = term.get_cursor_pos()
+            width, _ = term.get_size()
+            x_pos = int(x_pos)
+            width = int(width)
+            available = max(1, width - x_pos + 1)
+            chunk = remaining[:available]
+            term.write(chunk)
+            remaining = remaining[available:]
+            if remaining:
+                _terminal_newline()
+
+        if index != len(parts) - 1:
+            _terminal_newline()
+
+    return None
+
+
 def print(*values, sep=" ", end="\n"):
-    _call("__global", "write", sep.join(str(value) for value in values) + end)
+    _terminal_write_text(sep.join(str(value) for value in values) + end)
 
 
 def input(prompt=""):
     if prompt:
-        _call("__global", "write", str(prompt))
+        _terminal_write_text(prompt)
     value = _call("__global", "read")
     if value is None:
         return ""
@@ -2687,7 +2736,7 @@ def _run_repl():
         try:
             compiled = _codeop.compile_command(source, "<stdin>", "single")
         except Exception:
-            _call("__global", "write", _format_exception_text())
+            _terminal_write_text(_format_exception_text())
             buffer = []
             continue
 
@@ -2700,7 +2749,7 @@ def _run_repl():
         except SystemExit:
             break
         except Exception:
-            _call("__global", "write", _format_exception_text())
+            _terminal_write_text(_format_exception_text())
         buffer = []
 
     return None

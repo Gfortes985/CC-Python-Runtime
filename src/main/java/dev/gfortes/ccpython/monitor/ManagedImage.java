@@ -15,10 +15,11 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import javax.imageio.ImageIO;
+import net.minecraft.util.FastColor;
 
 public final class ManagedImage {
     private static final long MAX_DOWNLOAD_BYTES = 16L * 1024L * 1024L;
-    private static final long MAX_IMAGE_PIXELS = 4_194_304L;
+    private static final long MAX_IMAGE_PIXELS = 8_388_608L;
 
     private final BufferedImage image;
 
@@ -97,7 +98,8 @@ public final class ManagedImage {
         if (!dither) {
             for (int y = 0; y < height; y++) {
                 for (int x = 0; x < width; x++) {
-                    quantized.setRGB(x, y, MonitorPalette.argb(Byte.toUnsignedInt(MonitorPalette.nearestIndex(image.getRGB(x, y)))));
+                    int prepared = prepareForMonitorPalette(image.getRGB(x, y));
+                    quantized.setRGB(x, y, MonitorPalette.argb(Byte.toUnsignedInt(MonitorPalette.nearestIndex(prepared))));
                 }
             }
             return new ManagedImage(quantized);
@@ -108,7 +110,7 @@ public final class ManagedImage {
         double[] blue = new double[width * height];
         for (int y = 0; y < height; y++) {
             for (int x = 0; x < width; x++) {
-                int argb = image.getRGB(x, y);
+                int argb = prepareForMonitorPalette(image.getRGB(x, y));
                 int index = y * width + x;
                 red[index] = (argb >>> 16) & 0xFF;
                 green[index] = (argb >>> 8) & 0xFF;
@@ -150,11 +152,15 @@ public final class ManagedImage {
         return pixels;
     }
 
+    public int[] toArgbPixels() {
+        return image.getRGB(0, 0, width(), height(), null, 0, width());
+    }
+
     public NativeImage toNativeImage() {
         NativeImage nativeImage = new NativeImage(width(), height(), false);
         for (int y = 0; y < height(); y++) {
             for (int x = 0; x < width(); x++) {
-                nativeImage.setPixelRGBA(x, y, image.getRGB(x, y));
+                nativeImage.setPixelRGBA(x, y, FastColor.ABGR32.fromArgb32(image.getRGB(x, y)));
             }
         }
         return nativeImage;
@@ -175,7 +181,12 @@ public final class ManagedImage {
     private static void validateSize(int width, int height) throws IOException {
         if (width <= 0 || height <= 0) throw new IOException("Image dimensions must be positive.");
         long pixels = (long) width * (long) height;
-        if (pixels > MAX_IMAGE_PIXELS) throw new IOException("Image exceeds the configured pixel budget.");
+        if (pixels > MAX_IMAGE_PIXELS) {
+            throw new IOException(
+                "Image is too large: %dx%d (%d pixels), limit is %d pixels."
+                    .formatted(width, height, pixels, MAX_IMAGE_PIXELS)
+            );
+        }
     }
 
     private static void applyResampleHints(Graphics2D graphics, String resample) {
@@ -204,5 +215,37 @@ public final class ManagedImage {
 
     private static int rgba(int red, int green, int blue) {
         return 0xFF00_0000 | (red << 16) | (green << 8) | blue;
+    }
+
+    private static int prepareForMonitorPalette(int argb) {
+        int alpha = (argb >>> 24) & 0xFF;
+        if (alpha < 8) return argb;
+
+        double red = ((argb >>> 16) & 0xFF) / 255.0;
+        double green = ((argb >>> 8) & 0xFF) / 255.0;
+        double blue = (argb & 0xFF) / 255.0;
+
+        double luminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+        if (luminance <= 0.80) return argb;
+
+        double mean = (red + green + blue) / 3.0;
+        double blend = Math.min(1.0, (luminance - 0.80) / 0.20);
+        double saturationBoost = 1.0 + 0.35 * blend;
+        red = mean + (red - mean) * saturationBoost;
+        green = mean + (green - mean) * saturationBoost;
+        blue = mean + (blue - mean) * saturationBoost;
+
+        double adjustedLuminance = 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+        double targetLuminance = 0.80 + (luminance - 0.80) * 0.28;
+        double scale = adjustedLuminance <= 1.0e-6 ? 1.0 : targetLuminance / adjustedLuminance;
+
+        red = clampUnit(red * scale);
+        green = clampUnit(green * scale);
+        blue = clampUnit(blue * scale);
+        return rgba(clamp(red * 255.0), clamp(green * 255.0), clamp(blue * 255.0));
+    }
+
+    private static double clampUnit(double value) {
+        return Math.max(0.0, Math.min(1.0, value));
     }
 }

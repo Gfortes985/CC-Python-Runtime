@@ -3,7 +3,7 @@ package dev.gfortes.ccpython.monitor;
 import dan200.computercraft.core.util.Colour;
 
 public final class MonitorPalette {
-    public static final int PIXELS_PER_BLOCK = 64;
+    public static final int PIXELS_PER_BLOCK = 128;
     private static final int[] ARGB_BY_BLIT = {
         Colour.WHITE.getARGB(),
         Colour.ORANGE.getARGB(),
@@ -63,8 +63,7 @@ public final class MonitorPalette {
     public static int coerceArgb(long value) {
         if (value > 0 && (value & (value - 1L)) == 0L && value <= 0x8000L) {
             int bit = Long.numberOfTrailingZeros(value);
-            int blit = 15 - bit;
-            return argb(blit);
+            return argb(bit);
         }
 
         if ((value & 0xFF00_0000L) == 0L) return (int) (0xFF00_0000L | (value & 0x00FF_FFFFL));

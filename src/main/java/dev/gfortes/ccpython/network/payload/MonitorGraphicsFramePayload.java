@@ -16,7 +16,7 @@ public record MonitorGraphicsFramePayload(
     int blockHeight,
     int pixelWidth,
     int pixelHeight,
-    byte[] pixels
+    int[] pixels
 ) implements CustomPacketPayload {
     public static final Type<MonitorGraphicsFramePayload> TYPE = new Type<>(
         ResourceLocation.fromNamespaceAndPath(CCPythonMod.MOD_ID, "monitor_graphics_frame")
@@ -33,7 +33,7 @@ public record MonitorGraphicsFramePayload(
             buffer.writeInt(payload.pixelWidth());
             buffer.writeInt(payload.pixelHeight());
             buffer.writeInt(payload.pixels().length);
-            buffer.writeBytes(payload.pixels());
+            for (int pixel : payload.pixels()) buffer.writeInt(pixel);
         },
         buffer -> {
             String dimension = readUtf8(buffer);
@@ -42,8 +42,8 @@ public record MonitorGraphicsFramePayload(
             int blockHeight = buffer.readInt();
             int pixelWidth = buffer.readInt();
             int pixelHeight = buffer.readInt();
-            byte[] pixels = new byte[buffer.readInt()];
-            buffer.readBytes(pixels);
+            int[] pixels = new int[buffer.readInt()];
+            for (int index = 0; index < pixels.length; index++) pixels[index] = buffer.readInt();
             return new MonitorGraphicsFramePayload(dimension, origin, blockWidth, blockHeight, pixelWidth, pixelHeight, pixels);
         }
     );

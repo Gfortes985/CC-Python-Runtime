@@ -41,6 +41,7 @@ import parallel
 ### `wait_for_any(*functions)`
 
 Запускает несколько задач и возвращает индекс первой завершившейся.
+После этого остальные задачи останавливаются. Это поведение аналогично Lua `parallel.waitForAny`.
 
 ### `wait_for_all(*functions)`
 
@@ -74,6 +75,8 @@ async def wait_q():
 
 print(parallel.wait_for_any(tick, wait_q))
 ```
+
+Если `wait_q()` завершится первой, `tick()` будет остановлен, а вызов выше вернёт номер завершившейся задачи, например `2`.
 
 ### `wait_for_all`
 

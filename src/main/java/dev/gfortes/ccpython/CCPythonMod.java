@@ -38,6 +38,7 @@ public final class CCPythonMod {
 
     private void onServerStarted(ServerStartedEvent event) {
         SandboxManager.getInstance().warmUpAsync();
+        MonitorGraphicsManager.getInstance().initializeServer(event.getServer());
     }
 
     private void onServerStopping(ServerStoppingEvent event) {

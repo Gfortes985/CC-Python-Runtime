@@ -8,7 +8,6 @@ import dan200.computercraft.shared.peripheral.monitor.MonitorBlockEntity;
 import dev.gfortes.ccpython.CCPythonMod;
 import dev.gfortes.ccpython.monitor.MonitorGraphicsKey;
 import dev.gfortes.ccpython.monitor.MonitorGraphicsUtil;
-import dev.gfortes.ccpython.monitor.MonitorPalette;
 import dev.gfortes.ccpython.network.payload.MonitorGraphicsClearPayload;
 import dev.gfortes.ccpython.network.payload.MonitorGraphicsFramePayload;
 import java.util.Map;
@@ -19,11 +18,13 @@ import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.util.FastColor;
 import net.minecraft.world.level.Level;
 import org.joml.Matrix4f;
 
 public final class ClientMonitorGraphicsState {
     private static final float TERMINAL_EDGE = 0.034375f;
+    private static final int FULL_BRIGHT = 0x00F000F0;
     private static final Map<MonitorGraphicsKey, Entry> ENTRIES = new ConcurrentHashMap<>();
 
     private ClientMonitorGraphicsState() {
@@ -79,10 +80,10 @@ public final class ClientMonitorGraphicsState {
 
         Matrix4f matrix = poseStack.last().pose();
         VertexConsumer consumer = buffers.getBuffer(RenderType.text(entry.textureLocation()));
-        consumer.addVertex(matrix, left, bottom, 0.001f).setColor(255, 255, 255, 255).setUv(0.0f, 1.0f).setOverlay(OverlayTexture.NO_OVERLAY).setLight(packedLight).setNormal(0, 0, 1);
-        consumer.addVertex(matrix, right, bottom, 0.001f).setColor(255, 255, 255, 255).setUv(1.0f, 1.0f).setOverlay(OverlayTexture.NO_OVERLAY).setLight(packedLight).setNormal(0, 0, 1);
-        consumer.addVertex(matrix, right, top, 0.001f).setColor(255, 255, 255, 255).setUv(1.0f, 0.0f).setOverlay(OverlayTexture.NO_OVERLAY).setLight(packedLight).setNormal(0, 0, 1);
-        consumer.addVertex(matrix, left, top, 0.001f).setColor(255, 255, 255, 255).setUv(0.0f, 0.0f).setOverlay(OverlayTexture.NO_OVERLAY).setLight(packedLight).setNormal(0, 0, 1);
+        consumer.addVertex(matrix, left, bottom, 0.001f).setColor(255, 255, 255, 255).setUv(0.0f, 1.0f).setOverlay(OverlayTexture.NO_OVERLAY).setLight(FULL_BRIGHT).setNormal(0, 0, 1);
+        consumer.addVertex(matrix, right, bottom, 0.001f).setColor(255, 255, 255, 255).setUv(1.0f, 1.0f).setOverlay(OverlayTexture.NO_OVERLAY).setLight(FULL_BRIGHT).setNormal(0, 0, 1);
+        consumer.addVertex(matrix, right, top, 0.001f).setColor(255, 255, 255, 255).setUv(1.0f, 0.0f).setOverlay(OverlayTexture.NO_OVERLAY).setLight(FULL_BRIGHT).setNormal(0, 0, 1);
+        consumer.addVertex(matrix, left, top, 0.001f).setColor(255, 255, 255, 255).setUv(0.0f, 0.0f).setOverlay(OverlayTexture.NO_OVERLAY).setLight(FULL_BRIGHT).setNormal(0, 0, 1);
         poseStack.popPose();
     }
 
@@ -92,11 +93,11 @@ public final class ClientMonitorGraphicsState {
 
         private Entry(MonitorGraphicsFramePayload payload) {
             NativeImage image = new NativeImage(payload.pixelWidth(), payload.pixelHeight(), false);
-            byte[] pixels = payload.pixels();
+            int[] pixels = payload.pixels();
             for (int y = 0; y < payload.pixelHeight(); y++) {
                 for (int x = 0; x < payload.pixelWidth(); x++) {
                     int index = y * payload.pixelWidth() + x;
-                    image.setPixelRGBA(x, y, MonitorPalette.argb(Byte.toUnsignedInt(pixels[index])));
+                    image.setPixelRGBA(x, y, FastColor.ABGR32.fromArgb32(pixels[index]));
                 }
             }
 
