@@ -1,6 +1,11 @@
 package dev.gfortes.ccpython.config;
 
+import dev.gfortes.ccpython.CCPythonMod;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import net.minecraft.server.MinecraftServer;
+import net.neoforged.fml.loading.FMLPaths;
 import net.neoforged.neoforge.common.ModConfigSpec;
 
 public final class CCPythonConfig {
@@ -14,6 +19,7 @@ public final class CCPythonConfig {
     public static final ModConfigSpec.LongValue MAX_SOURCE_BYTES;
     public static final ModConfigSpec.LongValue MAX_BRIDGE_PAYLOAD_BYTES;
     public static final ModConfigSpec.IntValue MAX_OPEN_FILE_HANDLES_PER_PROCESS;
+    public static final ModConfigSpec.ConfigValue<String> DEFAULT_MIDI_SOUNDFONT;
     public static final ModConfigSpec.BooleanValue ENABLE_RELAXED_SINGLEPLAYER_LIMITS;
     public static final ModConfigSpec.IntValue SINGLEPLAYER_MAX_PROCESSES_PER_COMPUTER;
     public static final ModConfigSpec.IntValue SINGLEPLAYER_MAX_PARALLEL_RUNTIMES;
@@ -51,6 +57,15 @@ public final class CCPythonConfig {
         MAX_OPEN_FILE_HANDLES_PER_PROCESS = builder
             .comment("Maximum simultaneously open CraftOS file handles per Python process.")
             .defineInRange("maxOpenFileHandlesPerProcess", 32, 1, 1024);
+        builder.pop();
+
+        builder.push("midi");
+        DEFAULT_MIDI_SOUNDFONT = builder
+            .comment(
+                "Optional default MIDI soundfont path. Relative paths resolve against the Minecraft config directory.",
+                "Leave empty to auto-detect the first .sf2 file from config/ccpython/soundfonts."
+            )
+            .define("defaultSoundfont", "");
         builder.pop();
 
         builder.push("singleplayer");
@@ -119,6 +134,26 @@ public final class CCPythonConfig {
 
     public static int maxOpenFileHandlesPerProcess(MinecraftServer server) {
         return useSingleplayerLimits(server) ? SINGLEPLAYER_MAX_OPEN_FILE_HANDLES_PER_PROCESS.get() : MAX_OPEN_FILE_HANDLES_PER_PROCESS.get();
+    }
+
+    public static String defaultMidiSoundfont() {
+        return DEFAULT_MIDI_SOUNDFONT.get().trim();
+    }
+
+    public static Path soundfontConfigDirectory() {
+        return configDirectory().resolve(CCPythonMod.MOD_ID).resolve("soundfonts");
+    }
+
+    public static Path configDirectory() {
+        return FMLPaths.CONFIGDIR.get();
+    }
+
+    public static void ensureSoundfontConfigDirectory() {
+        try {
+            Files.createDirectories(soundfontConfigDirectory());
+        } catch (IOException exception) {
+            CCPythonMod.LOGGER.warn("Failed to create MIDI soundfont config directory {}.", soundfontConfigDirectory(), exception);
+        }
     }
 
     private static boolean useSingleplayerLimits(MinecraftServer server) {

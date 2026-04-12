@@ -220,7 +220,7 @@ def _camel(name):
     return value.replace("Id", "ID").replace("Gps", "GPS").replace("Http", "HTTP").replace("Url", "URL")
 
 
-def _unwrap(response):
+def _unwrap(response, decode=True):
     if not response["ok"]:
         raise RuntimeError(response["error"] or "Lua host call failed")
 
@@ -228,12 +228,16 @@ def _unwrap(response):
     if len(results) == 0:
         return None
     if len(results) == 1:
-        return _decode_host_value(results[0])
-    return tuple(_decode_host_value(result) for result in results)
+        return _decode_host_value(results[0]) if decode else results[0]
+    return tuple((_decode_host_value(result) if decode else result) for result in results)
 
 
 def _call(module, method, *args):
     return _unwrap(_HOST.call(module, _camel(method), [_encode_host_value(arg) for arg in args]))
+
+
+def _call_raw(module, method, *args):
+    return _unwrap(_HOST.call(module, _camel(method), [_encode_host_value(arg) for arg in args]), decode=False)
 
 
 def _peripheral_call(side, method, *args):
@@ -1384,20 +1388,51 @@ class _CCFile:
     def __init__(self, token, mode):
         self._token = token
         self._mode = mode
+        self._binary = "b" in str(mode or "")
         self._closed = False
 
     def read(self, count=None):
+        caller = _call_raw if self._binary else _call
+        value = caller("__fs_handle", "read_all" if count is None else "read", self._token, *((), (count,))[count is not None])
+        if value is None:
+            return None
+        if self._binary:
+            return bytes(ord(ch) & 0xFF for ch in value)
         if count is None:
-            return _decode_terminal_text(_call("__fs_handle", "read_all", self._token))
-        return _call("__fs_handle", "read", self._token, count)
+            return _decode_terminal_text(value)
+        return value
 
     def readline(self):
-        return _decode_terminal_text(_call("__fs_handle", "read_line", self._token))
+        value = (_call_raw if self._binary else _call)("__fs_handle", "read_line", self._token)
+        if value is None:
+            return None
+        if self._binary:
+            return bytes(ord(ch) & 0xFF for ch in value)
+        return _decode_terminal_text(value)
 
     def write(self, value):
+        if self._binary:
+            if isinstance(value, bytearray):
+                value = bytes(value)
+            if isinstance(value, bytes):
+                payload = "".join(chr(byte) for byte in value)
+            else:
+                raise TypeError("binary file write expects bytes-like data")
+            _call("__fs_handle", "write", self._token, payload)
+            return None
+
         _call("__fs_handle", "write", self._token, _encode_terminal_text(str(value)))
 
     def writeline(self, value=""):
+        if self._binary:
+            if isinstance(value, bytearray):
+                value = bytes(value)
+            if isinstance(value, bytes):
+                self.write(value + b"\n")
+            else:
+                raise TypeError("binary file writeline expects bytes-like data")
+            return None
+
         _call("__fs_handle", "write_line", self._token, _encode_terminal_text(str(value)))
 
     def flush(self):
@@ -1936,6 +1971,716 @@ class _MonitorGraphicsModule(_types.ModuleType):
         return self.draw(target, image, x, y, clear)
 
 
+class _MidiParseError(ValueError):
+    pass
+
+
+class _MidiReader:
+    def __init__(self, data, source="<midi>"):
+        self._data = bytes(data)
+        self._source = source
+        self._pos = 0
+
+    def remaining(self):
+        return len(self._data) - self._pos
+
+    def read_u8(self):
+        self._require(1)
+        value = self._data[self._pos]
+        self._pos += 1
+        return value
+
+    def read_u16be(self):
+        self._require(2)
+        value = (self._data[self._pos] << 8) | self._data[self._pos + 1]
+        self._pos += 2
+        return value
+
+    def read_u32be(self):
+        self._require(4)
+        value = (
+            (self._data[self._pos] << 24)
+            | (self._data[self._pos + 1] << 16)
+            | (self._data[self._pos + 2] << 8)
+            | self._data[self._pos + 3]
+        )
+        self._pos += 4
+        return value
+
+    def read_bytes(self, length):
+        length = int(length)
+        self._require(length)
+        value = self._data[self._pos : self._pos + length]
+        self._pos += length
+        return value
+
+    def unread(self, count):
+        self._pos = max(0, self._pos - int(count))
+
+    def read_vlq(self):
+        value = 0
+        for _ in range(4):
+            byte = self.read_u8()
+            value = (value << 7) | (byte & 0x7F)
+            if (byte & 0x80) == 0:
+                return value
+        raise _MidiParseError("Malformed variable-length quantity in %s" % self._source)
+
+    def _require(self, length):
+        if self.remaining() < length:
+            raise _MidiParseError("Unexpected end of MIDI data in %s" % self._source)
+
+
+def _midi_read_chunk(reader):
+    chunk_type = reader.read_bytes(4)
+    chunk_length = reader.read_u32be()
+    chunk_data = reader.read_bytes(chunk_length)
+    return chunk_type, chunk_data
+
+
+def _midi_program_to_instrument(channel, program, note=None):
+    if int(channel) == 9:
+        if note in (49, 52, 55, 57):
+            return "cow_bell"
+        if note in (42, 44, 46):
+            return "hat"
+        if note in (38, 40):
+            return "snare"
+        if note in (35, 36):
+            return "basedrum"
+        if note in (41, 43, 45, 47, 48, 50):
+            return "didgeridoo"
+        return "basedrum"
+
+    program = int(program or 0)
+    if 0 <= program <= 7:
+        return "harp"
+    if 8 <= program <= 15:
+        return "xylophone" if 8 <= program <= 11 else "bell"
+    if 16 <= program <= 23:
+        return "pling"
+    if 24 <= program <= 31:
+        return "guitar" if program <= 27 else "banjo"
+    if 32 <= program <= 39:
+        return "bass" if program <= 35 else "didgeridoo"
+    if 40 <= program <= 47:
+        return "flute"
+    if 48 <= program <= 55:
+        return "chime"
+    if 56 <= program <= 63:
+        return "didgeridoo"
+    if 64 <= program <= 71:
+        return "flute"
+    if 72 <= program <= 79:
+        return "flute"
+    if 80 <= program <= 87:
+        return "bit"
+    if 88 <= program <= 95:
+        return "bell"
+    if 96 <= program <= 103:
+        return "bit"
+    if 104 <= program <= 111:
+        return "banjo"
+    if 112 <= program <= 119:
+        return "cow_bell"
+    if 120 <= program <= 127:
+        return "bit"
+    return "harp"
+
+
+def _midi_velocity_to_volume(velocity, scale=1.0):
+    velocity = max(0.0, min(127.0, float(velocity)))
+    scale = float(scale)
+    return max(0.03, min(3.0, (velocity / 127.0) * scale))
+
+
+def _midi_note_to_pitch(note, transpose=0):
+    return float(int(note) + int(transpose) - 54)
+
+
+def _midi_note_to_frequency(note, transpose=0):
+    return 440.0 * (2.0 ** (((float(note) + float(transpose)) - 69.0) / 12.0))
+
+
+def _midi_estimate_duration(events, division):
+    tempo = 500000
+    current_tick = 0
+    seconds = 0.0
+
+    for event in events:
+        tick = int(event["tick"])
+        delta_ticks = tick - current_tick
+        if delta_ticks > 0:
+            seconds += (delta_ticks * tempo) / (int(division) * 1000000.0)
+            current_tick = tick
+        if event["kind"] == "tempo":
+            tempo = int(event["tempo"])
+
+    return seconds
+
+
+def _parse_midi_track(data, track_index, sequence):
+    reader = _MidiReader(data, "<track %d>" % (track_index + 1))
+    absolute_tick = 0
+    running_status = None
+    events = []
+    note_count = 0
+
+    while reader.remaining() > 0:
+        absolute_tick += reader.read_vlq()
+        status = reader.read_u8()
+
+        if status < 0x80:
+            if running_status is None:
+                raise _MidiParseError("Running status without previous event in track %d" % (track_index + 1))
+            reader.unread(1)
+            status = running_status
+        elif status < 0xF0:
+            running_status = status
+        else:
+            running_status = None
+
+        if status == 0xFF:
+            meta_type = reader.read_u8()
+            payload = reader.read_bytes(reader.read_vlq())
+
+            if meta_type == 0x2F:
+                break
+            if meta_type == 0x51 and len(payload) == 3:
+                tempo = (payload[0] << 16) | (payload[1] << 8) | payload[2]
+                events.append({
+                    "tick": absolute_tick,
+                    "priority": 0,
+                    "seq": sequence,
+                    "kind": "tempo",
+                    "tempo": tempo,
+                })
+                sequence += 1
+            continue
+
+        if status in (0xF0, 0xF7):
+            reader.read_bytes(reader.read_vlq())
+            continue
+
+        event_type = status >> 4
+        channel = status & 0x0F
+
+        if event_type in (0x8, 0x9, 0xA, 0xB, 0xE):
+            first = reader.read_u8()
+            second = reader.read_u8()
+            if event_type == 0x9 and second > 0:
+                events.append({
+                    "tick": absolute_tick,
+                    "priority": 2,
+                    "seq": sequence,
+                    "kind": "note_on",
+                    "channel": channel,
+                    "note": first,
+                    "velocity": second,
+                })
+                sequence += 1
+                note_count += 1
+            elif event_type == 0x8 or (event_type == 0x9 and second == 0):
+                events.append({
+                    "tick": absolute_tick,
+                    "priority": 3,
+                    "seq": sequence,
+                    "kind": "note_off",
+                    "channel": channel,
+                    "note": first,
+                    "velocity": second,
+                })
+                sequence += 1
+            continue
+
+        if event_type in (0xC, 0xD):
+            first = reader.read_u8()
+            if event_type == 0xC:
+                events.append({
+                    "tick": absolute_tick,
+                    "priority": 1,
+                    "seq": sequence,
+                    "kind": "program",
+                    "channel": channel,
+                    "program": first,
+                })
+                sequence += 1
+            continue
+
+        raise _MidiParseError("Unsupported MIDI event 0x%02X in track %d" % (status, track_index + 1))
+
+    return events, note_count, sequence
+
+
+def _parse_midi_file(path):
+    with fs.open(path, "rb") as handle:
+        data = handle.read()
+
+    if not data:
+        raise _MidiParseError("MIDI file is empty: %s" % path)
+    if not isinstance(data, (bytes, bytearray)):
+        raise _MidiParseError("MIDI file did not load as bytes: %s" % path)
+
+    reader = _MidiReader(data, path)
+    chunk_type, header_data = _midi_read_chunk(reader)
+    if chunk_type != b"MThd":
+        raise _MidiParseError("Expected MThd header in %s" % path)
+
+    header = _MidiReader(header_data[:6], path)
+    format_type = header.read_u16be()
+    track_count = header.read_u16be()
+    division = header.read_u16be()
+
+    if division & 0x8000:
+        raise _MidiParseError("SMPTE MIDI time division is not supported yet")
+
+    events = []
+    note_count = 0
+    sequence = 0
+
+    for track_index in range(track_count):
+        chunk_type, track_data = _midi_read_chunk(reader)
+        if chunk_type != b"MTrk":
+            raise _MidiParseError("Expected MTrk chunk #%d in %s" % (track_index + 1, path))
+
+        track_events, track_notes, sequence = _parse_midi_track(track_data, track_index, sequence)
+        events.extend(track_events)
+        note_count += track_notes
+
+    events.sort(key=lambda event: (event["tick"], event["priority"], event["seq"]))
+
+    return _MidiSong(
+        path=path,
+        format_type=format_type,
+        track_count=track_count,
+        division=division,
+        events=events,
+        note_count=note_count,
+        duration_seconds=_midi_estimate_duration(events, division),
+    )
+
+
+def _midi_resolve_speaker(target):
+    if isinstance(target, str):
+        if _peripheral_type(target) != "speaker":
+            raise ValueError("No such speaker: %s" % target)
+        return _PeripheralProxy(target)
+
+    side = getattr(target, "_side", None)
+    if isinstance(side, str):
+        if _peripheral_type(side) != "speaker":
+            raise ValueError("Peripheral %s is not a speaker" % side)
+        return target
+
+    raise TypeError("speaker target must be a side string or wrapped speaker peripheral")
+
+
+def _midi_coerce_song(value):
+    if isinstance(value, _MidiSong):
+        return value
+    if isinstance(value, str):
+        return _parse_midi_file(value)
+    raise TypeError("song must be a MIDI handle from cc.midi.open(...) or a path string")
+
+
+def _midi_play_song_notes(song, target, tempo_scale=1.0, volume=1.0, transpose=0):
+    song = _midi_coerce_song(song)
+    speaker = _midi_resolve_speaker(target)
+    tempo_scale = float(tempo_scale)
+    if tempo_scale <= 0:
+        raise ValueError("tempo_scale must be > 0")
+
+    volume = float(volume)
+    transpose = int(transpose)
+    current_tick = 0
+    tempo = 500000
+    programs = {}
+    attempted = 0
+    played = 0
+    spill_ticks = 0
+    spill_notes = 0
+
+    for event in song._events:
+        tick = int(event["tick"])
+        delta_ticks = tick - current_tick
+        if delta_ticks > 0:
+            delay = (delta_ticks * tempo) / (song._division * 1000000.0 * tempo_scale)
+            if delay > 0:
+                sleep(delay)
+            current_tick = tick
+
+        kind = event["kind"]
+        if kind == "tempo":
+            tempo = int(event["tempo"])
+            continue
+        if kind == "program":
+            programs[int(event["channel"])] = int(event["program"])
+            continue
+        if kind != "note_on":
+            continue
+
+        instrument = _midi_program_to_instrument(
+            event["channel"],
+            programs.get(int(event["channel"]), 0),
+            event["note"],
+        )
+        note_pitch = _midi_note_to_pitch(event["note"], transpose)
+        note_volume = _midi_velocity_to_volume(event["velocity"], volume)
+
+        attempted += 1
+        first_try = True
+        while not speaker.play_note(instrument, note_volume, note_pitch):
+            first_try = False
+            spill_notes += 1
+            spill_ticks += 1
+            sleep(0.05)
+        played += 1
+
+    return {
+        "path": song._path,
+        "format": song._format_type,
+        "tracks": song._track_count,
+        "notes": song._note_count,
+        "played": played,
+        "attempted": attempted,
+        "duration": song._duration_seconds,
+        "spill_notes": spill_notes,
+        "spill_ticks": spill_ticks,
+    }
+
+
+def _midi_audio_voice(channel, program, note=None):
+    if int(channel) == 9:
+        if note in (49, 52, 55, 57):
+            return "drum_cymbal"
+        if note in (42, 44, 46):
+            return "drum_hat"
+        if note in (38, 40):
+            return "drum_snare"
+        if note in (35, 36):
+            return "drum_kick"
+        return "drum_tom"
+
+    program = int(program or 0)
+    if 0 <= program <= 7:
+        return "piano"
+    if 8 <= program <= 15:
+        return "mallet"
+    if 16 <= program <= 23:
+        return "organ"
+    if 24 <= program <= 31:
+        return "guitar"
+    if 32 <= program <= 39:
+        return "bass"
+    if 40 <= program <= 47:
+        return "strings"
+    if 48 <= program <= 55:
+        return "choir"
+    if 56 <= program <= 63:
+        return "brass"
+    if 64 <= program <= 71:
+        return "reed"
+    if 72 <= program <= 79:
+        return "flute"
+    if 80 <= program <= 87:
+        return "lead"
+    if 88 <= program <= 95:
+        return "pad"
+    if 96 <= program <= 103:
+        return "synthfx"
+    if 104 <= program <= 111:
+        return "pluck"
+    if 112 <= program <= 119:
+        return "mallet"
+    if 120 <= program <= 127:
+        return "bit"
+    return "piano"
+
+
+def _midi_build_audio_notes(song, tempo_scale=1.0, transpose=0, volume=1.0):
+    song = _midi_coerce_song(song)
+    tempo_scale = float(tempo_scale)
+    if tempo_scale <= 0:
+        raise ValueError("tempo_scale must be > 0")
+
+    current_tick = 0
+    current_time = 0.0
+    tempo = 500000
+    programs = {}
+    active = {}
+    notes = []
+
+    for event in song._events:
+        tick = int(event["tick"])
+        delta_ticks = tick - current_tick
+        if delta_ticks > 0:
+            current_time += (delta_ticks * tempo) / (song._division * 1000000.0 * tempo_scale)
+            current_tick = tick
+
+        kind = event["kind"]
+        if kind == "tempo":
+            tempo = int(event["tempo"])
+            continue
+        if kind == "program":
+            programs[int(event["channel"])] = int(event["program"])
+            continue
+
+        key = (int(event["channel"]), int(event["note"]))
+        if kind == "note_on":
+            active.setdefault(key, []).append({
+                "channel": int(event["channel"]),
+                "note": int(event["note"]),
+                "velocity": int(event["velocity"]),
+                "program": int(programs.get(int(event["channel"]), 0)),
+                "start": current_time,
+            })
+            continue
+        if kind != "note_off":
+            continue
+
+        stack = active.get(key)
+        if not stack:
+            continue
+
+        started = stack.pop()
+        end_time = max(current_time, started["start"] + 0.02)
+        notes.append({
+            "channel": started["channel"],
+            "note": started["note"],
+            "velocity": started["velocity"],
+            "program": started["program"],
+            "voice": _midi_audio_voice(started["channel"], started["program"], started["note"]),
+            "frequency": _midi_note_to_frequency(started["note"], transpose),
+            "start": started["start"],
+            "end": end_time,
+            "gain": max(0.0, min(2.5, (started["velocity"] / 127.0) * float(volume))),
+        })
+
+    final_time = max(current_time, float(song._duration_seconds) / tempo_scale)
+    for stack in active.values():
+        for started in stack:
+            end_time = max(final_time, started["start"] + 0.12)
+            notes.append({
+                "channel": started["channel"],
+                "note": started["note"],
+                "velocity": started["velocity"],
+                "program": started["program"],
+                "voice": _midi_audio_voice(started["channel"], started["program"], started["note"]),
+                "frequency": _midi_note_to_frequency(started["note"], transpose),
+                "start": started["start"],
+                "end": end_time,
+                "gain": max(0.0, min(2.5, (started["velocity"] / 127.0) * float(volume))),
+            })
+
+    notes.sort(key=lambda item: item["start"])
+    return notes, max(final_time, max((note["end"] for note in notes), default=0.0))
+
+
+def _midi_wave_sample(note, sample_time, sample_index):
+    start = float(note["start"])
+    end = float(note["end"])
+    rel = sample_time - start
+    duration = max(0.02, end - start)
+    voice = note["voice"]
+    gain = float(note["gain"])
+
+    attack = min(0.008, duration * 0.2)
+    release = min(0.08, duration * 0.45)
+    if release >= duration:
+        release = duration * 0.5
+
+    if attack > 0.0 and rel < attack:
+        envelope = rel / attack
+    elif rel > duration - release:
+        envelope = max(0.0, (duration - rel) / max(release, 1e-6))
+    else:
+        envelope = 1.0
+
+    phase = float(note["frequency"]) * rel
+    frac = phase - int(phase)
+
+    if voice == "sine":
+        wave = _math.sin(2.0 * _math.pi * phase)
+    elif voice == "square":
+        wave = 1.0 if frac < 0.5 else -1.0
+    elif voice == "saw":
+        wave = (2.0 * frac) - 1.0
+    elif voice == "triangle":
+        wave = 1.0 - (4.0 * abs(frac - 0.5))
+    elif voice == "bell":
+        fade = _math.exp(-3.5 * rel)
+        wave = (
+            _math.sin(2.0 * _math.pi * phase)
+            + 0.5 * _math.sin(4.0 * _math.pi * phase)
+            + 0.2 * _math.sin(6.0 * _math.pi * phase)
+        ) * fade
+    elif voice == "noise":
+        seed = (sample_index + 1) * (int(note["note"]) + 17) * 12.9898
+        noise = _math.sin(seed) * 43758.5453
+        wave = ((noise - _math.floor(noise)) * 2.0) - 1.0
+        envelope *= _math.exp(-10.0 * rel)
+    else:
+        wave = _math.sin(2.0 * _math.pi * phase)
+
+    return wave * gain * envelope
+
+
+def _midi_soft_clip(sample):
+    sample = float(sample)
+    if -1.0 <= sample <= 1.0:
+        return sample
+    if sample > 0:
+        return sample / (1.0 + sample)
+    return sample / (1.0 - sample)
+
+
+def _midi_play_song_audio(song, target, tempo_scale=1.0, volume=1.0, transpose=0, soundfont=None):
+    song = _midi_coerce_song(song)
+    speaker = _midi_resolve_speaker(target)
+
+    soundfont_value = "" if soundfont in (None, "") else str(soundfont)
+    result = _call(
+        "__midi",
+        "play_soundfont_song",
+        speaker._side,
+        song._path,
+        float(tempo_scale),
+        float(volume),
+        int(transpose),
+        soundfont_value,
+    )
+
+    total_duration = float(song._duration_seconds) / max(0.001, float(tempo_scale))
+    if not isinstance(result, dict):
+        result = {}
+    result["engine"] = "soundfont"
+    result.setdefault("requested_soundfont", soundfont_value or "default")
+
+    if not isinstance(result, dict):
+        result = {}
+    result["path"] = song._path
+    result["format"] = song._format_type
+    result["tracks"] = song._track_count
+    result["notes"] = song._note_count
+    result["duration"] = total_duration
+    result["mode"] = "audio"
+    return result
+
+
+def _midi_play_song_hifi(song, target, tempo_scale=1.0, volume=1.0, transpose=0, soundfont=None):
+    song = _midi_coerce_song(song)
+    speaker = _midi_resolve_speaker(target)
+
+    soundfont_value = "" if soundfont in (None, "") else str(soundfont)
+    result = _call(
+        "__midi",
+        "play_hifi_soundfont_song",
+        speaker._side,
+        song._path,
+        float(tempo_scale),
+        float(volume),
+        int(transpose),
+        soundfont_value,
+    )
+
+    total_duration = float(song._duration_seconds) / max(0.001, float(tempo_scale))
+    if not isinstance(result, dict):
+        result = {}
+    result["engine"] = "soundfont_hifi"
+    result.setdefault("requested_soundfont", soundfont_value or "default")
+    result["path"] = song._path
+    result["format"] = song._format_type
+    result["tracks"] = song._track_count
+    result["notes"] = song._note_count
+    result["duration"] = total_duration
+    result["mode"] = "hifi"
+    return result
+
+
+def _midi_play_song(song, target, tempo_scale=1.0, volume=1.0, transpose=0, mode="notes", soundfont=None):
+    mode = str(mode or "notes").lower()
+    if mode in ("notes", "note"):
+        return _midi_play_song_notes(song, target, tempo_scale=tempo_scale, volume=volume, transpose=transpose)
+    if mode == "audio":
+        return _midi_play_song_audio(song, target, tempo_scale=tempo_scale, volume=volume, transpose=transpose, soundfont=soundfont)
+    if mode in ("hifi", "audio16", "pcm16"):
+        return _midi_play_song_hifi(song, target, tempo_scale=tempo_scale, volume=volume, transpose=transpose, soundfont=soundfont)
+    raise ValueError("Unsupported midi mode: %s" % mode)
+
+
+class _MidiSong:
+    def __init__(self, path, format_type, track_count, division, events, note_count, duration_seconds):
+        self._path = path
+        self._format_type = int(format_type)
+        self._track_count = int(track_count)
+        self._division = int(division)
+        self._events = list(events)
+        self._note_count = int(note_count)
+        self._duration_seconds = float(duration_seconds)
+
+    def __repr__(self):
+        return "<cc midi %s tracks=%d notes=%d duration=%.2fs>" % (
+            self._path,
+            self._track_count,
+            self._note_count,
+            self._duration_seconds,
+        )
+
+    def info(self):
+        return {
+            "path": self._path,
+            "format": self._format_type,
+            "tracks": self._track_count,
+            "division": self._division,
+            "notes": self._note_count,
+            "events": len(self._events),
+            "duration": self._duration_seconds,
+        }
+
+    def play(self, speaker, tempo_scale=1.0, volume=1.0, transpose=0, mode="notes", soundfont=None):
+        return _midi_play_song(
+            self,
+            speaker,
+            tempo_scale=tempo_scale,
+            volume=volume,
+            transpose=transpose,
+            mode=mode,
+            soundfont=soundfont,
+        )
+
+
+class _MidiModule(_types.ModuleType):
+    def __init__(self):
+        super().__init__("midi")
+
+    def __repr__(self):
+        return "<cc module 'midi'>"
+
+    def open(self, path):
+        return _parse_midi_file(path)
+
+    def load(self, path):
+        return self.open(path)
+
+    def list_soundfonts(self):
+        result = _call("__midi", "list_soundfonts")
+        return list(result or [])
+
+    def soundfonts(self):
+        return self.list_soundfonts()
+
+    def play(self, target, song, tempo_scale=1.0, volume=1.0, transpose=0, mode="notes", soundfont=None):
+        return _midi_play_song(
+            song,
+            target,
+            tempo_scale=tempo_scale,
+            volume=volume,
+            transpose=transpose,
+            mode=mode,
+            soundfont=soundfont,
+        )
+
+
 def _next_parallel_event():
     if _SYNTHETIC_EVENTS:
         return _SYNTHETIC_EVENTS.pop(0)
@@ -2231,6 +2976,7 @@ redstone = _LuaProxyModule("redstone", "redstone")
 rednet = _RednetModule("rednet")
 image = _ImageModule()
 monitorgfx = _MonitorGraphicsModule()
+midi = _MidiModule()
 parallel = _ParallelModule()
 fs = _FSModule("fs", "fs")
 os = _OSModule("os", "os")
@@ -2270,6 +3016,7 @@ _BRIDGE_MODULES = {
     "rednet": rednet,
     "image": image,
     "monitorgfx": monitorgfx,
+    "midi": midi,
     "parallel": parallel,
     "fs": fs,
     "os": os,
@@ -2289,6 +3036,7 @@ _CC_NAMESPACE_EXPORTS = {
     "rednet": rednet,
     "image": image,
     "monitorgfx": monitorgfx,
+    "midi": midi,
     "parallel": parallel,
     "fs": fs,
     "os": os,
@@ -2507,6 +3255,7 @@ def help(topic=None):
         print("  help(cc.rednet)     rednet helpers")
         print("  help(cc.image)      image loading and processing")
         print("  help(cc.monitorgfx) hi-res monitor graphics")
+        print("  help(cc.midi)       MIDI parsing and speaker playback")
         print("  help(cc.colors)     colour constants and helpers")
         print("  help(cc.keys)       keyboard constants")
         print("  help(cc.paintutils) drawing helpers")
@@ -2526,6 +3275,7 @@ def help(topic=None):
         print("  cc.rednet       networking helpers")
         print("  cc.image        image loading and processing helpers")
         print("  cc.monitorgfx   hi-res monitor graphics helpers")
+        print("  cc.midi         MIDI parsing and speaker playback")
         print("  cc.redstone     redstone helpers")
         print("  cc.colors       colour constants and bitmask helpers")
         print("  cc.keys         keyboard constants")
@@ -2569,6 +3319,12 @@ def help(topic=None):
         print("  size(target), clear(target, color=colors.black), disable(target)")
         print("  set_pixel(target, x, y, color)")
         print("  draw(target, image, x=1, y=1, clear=False)")
+        return None
+    if module_name in ("midi", "cc.midi"):
+        print("cc.midi helpers")
+        print("  open(path), load(path)")
+        print("  song.info(), song.play(speaker, tempo_scale=1.0, volume=1.0, transpose=0)")
+        print("  play(speaker, song_or_path, tempo_scale=1.0, volume=1.0, transpose=0)")
         return None
     if module_name in ("colors", "colours", "cc.colors", "cc.colours"):
         print("cc.colors helpers")
@@ -2691,6 +3447,7 @@ def _base_scope():
         "rednet": rednet,
         "image": image,
         "monitorgfx": monitorgfx,
+        "midi": midi,
         "parallel": parallel,
         "fs": fs,
         "os": os,

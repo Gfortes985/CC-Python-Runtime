@@ -4,6 +4,7 @@
   "compatibilityLevel": "JAVA_21",
   "mixins": [
     "ComputerMixin",
+    "SpeakerPeripheralMixin",
     "ServerMonitorMixin",
     "StringUtilMixin",
     "TextBufferMixin"

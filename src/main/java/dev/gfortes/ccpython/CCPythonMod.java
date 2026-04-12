@@ -3,6 +3,7 @@ package dev.gfortes.ccpython;
 import com.mojang.logging.LogUtils;
 import dan200.computercraft.api.ComputerCraftAPI;
 import dev.gfortes.ccpython.api.PythonLuaApi;
+import dev.gfortes.ccpython.audio.SpeakerHiFiAudioManager;
 import dev.gfortes.ccpython.config.CCPythonConfig;
 import dev.gfortes.ccpython.monitor.MonitorGraphicsManager;
 import dev.gfortes.ccpython.network.PacketHandler;
@@ -25,6 +26,7 @@ public final class CCPythonMod {
 
     public CCPythonMod(IEventBus modBus, ModContainer modContainer) {
         ComputerCraftAPI.registerAPIFactory(PythonLuaApi::new);
+        CCPythonConfig.ensureSoundfontConfigDirectory();
 
         modBus.addListener(PacketHandler::register);
         modContainer.registerConfig(ModConfig.Type.COMMON, CCPythonConfig.SPEC);
@@ -44,6 +46,7 @@ public final class CCPythonMod {
     private void onServerStopping(ServerStoppingEvent event) {
         PythonRuntimeManager.getInstance().shutdownServer(event.getServer());
         MonitorGraphicsManager.getInstance().shutdownServer(event.getServer());
+        SpeakerHiFiAudioManager.clearServer();
     }
 
     private void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {

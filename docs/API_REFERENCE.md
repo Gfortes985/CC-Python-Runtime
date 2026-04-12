@@ -46,6 +46,7 @@
 - [`cc.parallel`](./api/parallel.md)
 - [`cc.image`](./api/image.md)
 - [`cc.monitorgfx`](./api/monitorgfx.md)
+- [`cc.midi`](./api/midi.md)
 - [`cc.imports`](./api/imports.md)
 
 ## Быстрый пример

@@ -16,5 +16,6 @@ public final class ClientNetworkLifecycle {
     public static void onLoggingOut(ClientPlayerNetworkEvent.LoggingOut event) {
         ClientPythonRuntimeState.clearAll();
         ClientMonitorGraphicsState.clearAll();
+        ClientHiFiAudioManager.clearAll();
     }
 }

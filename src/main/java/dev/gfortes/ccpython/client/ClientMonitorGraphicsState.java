@@ -2,7 +2,9 @@ package dev.gfortes.ccpython.client;
 
 import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.vertex.PoseStack;
+import com.mojang.blaze3d.vertex.DefaultVertexFormat;
 import com.mojang.blaze3d.vertex.VertexConsumer;
+import com.mojang.blaze3d.vertex.VertexFormat;
 import dan200.computercraft.client.integration.ShaderMod;
 import dan200.computercraft.shared.peripheral.monitor.MonitorBlockEntity;
 import dev.gfortes.ccpython.CCPythonMod;
@@ -14,12 +16,17 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.renderer.MultiBufferSource;
+import net.minecraft.client.renderer.RenderStateShard;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.client.renderer.texture.DynamicTexture;
 import net.minecraft.client.renderer.texture.OverlayTexture;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.util.FastColor;
 import net.minecraft.world.level.Level;
+import org.lwjgl.opengl.EXTTextureFilterAnisotropic;
+import org.lwjgl.opengl.GL11;
+import org.lwjgl.opengl.GL30;
+import org.lwjgl.opengl.GL;
 import org.joml.Matrix4f;
 
 public final class ClientMonitorGraphicsState {
@@ -59,7 +66,7 @@ public final class ClientMonitorGraphicsState {
 
         var key = MonitorGraphicsUtil.key(origin);
         var entry = ENTRIES.get(key);
-        if (entry == null) return;
+        if (entry == null || entry.renderType() == null) return;
 
         poseStack.pushPose();
         var currentPos = blockEntity.getBlockPos();
@@ -79,17 +86,18 @@ public final class ClientMonitorGraphicsState {
         float bottom = (float) -(origin.getHeight() - 0.3125D + TERMINAL_EDGE * 2.0D);
 
         Matrix4f matrix = poseStack.last().pose();
-        VertexConsumer consumer = buffers.getBuffer(RenderType.text(entry.textureLocation()));
-        consumer.addVertex(matrix, left, bottom, 0.001f).setColor(255, 255, 255, 255).setUv(0.0f, 1.0f).setOverlay(OverlayTexture.NO_OVERLAY).setLight(FULL_BRIGHT).setNormal(0, 0, 1);
-        consumer.addVertex(matrix, right, bottom, 0.001f).setColor(255, 255, 255, 255).setUv(1.0f, 1.0f).setOverlay(OverlayTexture.NO_OVERLAY).setLight(FULL_BRIGHT).setNormal(0, 0, 1);
-        consumer.addVertex(matrix, right, top, 0.001f).setColor(255, 255, 255, 255).setUv(1.0f, 0.0f).setOverlay(OverlayTexture.NO_OVERLAY).setLight(FULL_BRIGHT).setNormal(0, 0, 1);
-        consumer.addVertex(matrix, left, top, 0.001f).setColor(255, 255, 255, 255).setUv(0.0f, 0.0f).setOverlay(OverlayTexture.NO_OVERLAY).setLight(FULL_BRIGHT).setNormal(0, 0, 1);
+        VertexConsumer consumer = buffers.getBuffer(entry.renderType());
+        consumer.addVertex(matrix, left, bottom, 0.01f).setColor(255, 255, 255, 255).setUv(0.0f, 1.0f).setOverlay(OverlayTexture.NO_OVERLAY).setLight(FULL_BRIGHT).setNormal(0, 0, 1);
+        consumer.addVertex(matrix, right, bottom, 0.01f).setColor(255, 255, 255, 255).setUv(1.0f, 1.0f).setOverlay(OverlayTexture.NO_OVERLAY).setLight(FULL_BRIGHT).setNormal(0, 0, 1);
+        consumer.addVertex(matrix, right, top, 0.01f).setColor(255, 255, 255, 255).setUv(1.0f, 0.0f).setOverlay(OverlayTexture.NO_OVERLAY).setLight(FULL_BRIGHT).setNormal(0, 0, 1);
+        consumer.addVertex(matrix, left, top, 0.01f).setColor(255, 255, 255, 255).setUv(0.0f, 0.0f).setOverlay(OverlayTexture.NO_OVERLAY).setLight(FULL_BRIGHT).setNormal(0, 0, 1);
         poseStack.popPose();
     }
 
     private static final class Entry implements AutoCloseable {
         private final ResourceLocation textureLocation;
         private final DynamicTexture texture;
+        private final RenderType renderType;
 
         private Entry(MonitorGraphicsFramePayload payload) {
             NativeImage image = new NativeImage(payload.pixelWidth(), payload.pixelHeight(), false);
@@ -102,17 +110,48 @@ public final class ClientMonitorGraphicsState {
             }
 
             texture = new DynamicTexture(image);
-            texture.setFilter(false, false);
             textureLocation = ResourceLocation.fromNamespaceAndPath(
                 CCPythonMod.MOD_ID,
                 "monitor/" + sanitize(payload.dimension()) + "/" + payload.origin().getX() + "_" + payload.origin().getY() + "_" + payload.origin().getZ()
             );
             Minecraft.getInstance().getTextureManager().register(textureLocation, texture);
+            renderType = RenderType.create(
+                "ccpython_monitor_hires_" + sanitize(payload.dimension()) + "_" + payload.origin().getX() + "_" + payload.origin().getY() + "_" + payload.origin().getZ(),
+                DefaultVertexFormat.NEW_ENTITY,
+                VertexFormat.Mode.QUADS,
+                1536,
+                true,
+                true,
+                RenderType.CompositeState.builder()
+                    .setShaderState(RenderType.RENDERTYPE_ENTITY_TRANSLUCENT_SHADER)
+                    .setTextureState(new RenderStateShard.TextureStateShard(textureLocation, true, true))
+                    .setTransparencyState(RenderType.TRANSLUCENT_TRANSPARENCY)
+                    .setCullState(RenderType.NO_CULL)
+                    .setLightmapState(RenderType.LIGHTMAP)
+                    .setOverlayState(RenderType.NO_OVERLAY)
+                    .setLayeringState(RenderType.POLYGON_OFFSET_LAYERING)
+                    .createCompositeState(true)
+            );
             texture.upload();
+            texture.bind();
+            GL30.glGenerateMipmap(GL11.GL_TEXTURE_2D);
+            texture.setFilter(true, true);
+            if (GL.getCapabilities().GL_EXT_texture_filter_anisotropic) {
+                float max = GL11.glGetFloat(EXTTextureFilterAnisotropic.GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT);
+                GL11.glTexParameterf(
+                    GL11.GL_TEXTURE_2D,
+                    EXTTextureFilterAnisotropic.GL_TEXTURE_MAX_ANISOTROPY_EXT,
+                    Math.min(8.0f, max)
+                );
+            }
         }
 
         private ResourceLocation textureLocation() {
             return textureLocation;
+        }
+
+        private RenderType renderType() {
+            return renderType;
         }
 
         @Override

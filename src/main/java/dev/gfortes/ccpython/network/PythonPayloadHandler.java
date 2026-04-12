@@ -1,7 +1,10 @@
 package dev.gfortes.ccpython.network;
 
+import dev.gfortes.ccpython.client.ClientHiFiAudioManager;
 import dev.gfortes.ccpython.client.ClientPythonRuntimeState;
 import dev.gfortes.ccpython.client.ClientMonitorGraphicsState;
+import dev.gfortes.ccpython.network.payload.HiFiAudioChunkPayload;
+import dev.gfortes.ccpython.network.payload.HiFiAudioStopPayload;
 import dev.gfortes.ccpython.network.payload.MonitorGraphicsClearPayload;
 import dev.gfortes.ccpython.network.payload.MonitorGraphicsFramePayload;
 import dev.gfortes.ccpython.network.payload.PythonRuntimeClearPayload;
@@ -49,6 +52,18 @@ public final class PythonPayloadHandler {
     public static void handleMonitorClear(MonitorGraphicsClearPayload payload, IPayloadContext context) {
         context.enqueueWork(() -> {
             if (FMLEnvironment.dist == Dist.CLIENT) ClientMonitorGraphicsState.apply(payload);
+        });
+    }
+
+    public static void handleHiFiAudioChunk(HiFiAudioChunkPayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> {
+            if (FMLEnvironment.dist == Dist.CLIENT) ClientHiFiAudioManager.apply(payload);
+        });
+    }
+
+    public static void handleHiFiAudioStop(HiFiAudioStopPayload payload, IPayloadContext context) {
+        context.enqueueWork(() -> {
+            if (FMLEnvironment.dist == Dist.CLIENT) ClientHiFiAudioManager.stop(payload.source());
         });
     }
 }

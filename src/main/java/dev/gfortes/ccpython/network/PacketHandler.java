@@ -1,5 +1,7 @@
 package dev.gfortes.ccpython.network;
 
+import dev.gfortes.ccpython.network.payload.HiFiAudioChunkPayload;
+import dev.gfortes.ccpython.network.payload.HiFiAudioStopPayload;
 import dev.gfortes.ccpython.network.payload.PythonRuntimeClearPayload;
 import dev.gfortes.ccpython.network.payload.PythonRuntimeErrorPayload;
 import dev.gfortes.ccpython.network.payload.PythonRuntimeResetPayload;
@@ -47,6 +49,16 @@ public final class PacketHandler {
             MonitorGraphicsClearPayload.TYPE,
             MonitorGraphicsClearPayload.STREAM_CODEC,
             PythonPayloadHandler::handleMonitorClear
+        );
+        registrar.playToClient(
+            HiFiAudioChunkPayload.TYPE,
+            HiFiAudioChunkPayload.STREAM_CODEC,
+            PythonPayloadHandler::handleHiFiAudioChunk
+        );
+        registrar.playToClient(
+            HiFiAudioStopPayload.TYPE,
+            HiFiAudioStopPayload.STREAM_CODEC,
+            PythonPayloadHandler::handleHiFiAudioStop
         );
     }
 }

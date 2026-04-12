@@ -1,9 +1,11 @@
 package dev.gfortes.ccpython.runtime;
 
 import dev.gfortes.ccpython.CCPythonMod;
+import dev.gfortes.ccpython.util.LuaValues;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import org.graalvm.polyglot.Context;
@@ -58,7 +60,12 @@ public final class PythonAPIBindings {
 
         @HostAccess.Export
         public Map<String, Object> call(String module, String method, List<Object> arguments) {
-            var response = runtime.hostCall(module, method, arguments == null ? List.of() : arguments);
+            var normalized = new ArrayList<Object>(arguments == null ? 0 : arguments.size());
+            if (arguments != null) {
+                for (var argument : arguments) normalized.add(LuaValues.normalize(argument));
+            }
+
+            var response = runtime.hostCall(module, method, normalized);
             return Map.of(
                 "ok", response.ok(),
                 "results", response.values(),

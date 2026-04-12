@@ -68,15 +68,33 @@ public final class PythonComputerRuntime implements AutoCloseable {
         if (process == null) return PythonActionResponse.failure("No active Python process is bound to this computer runtime.");
 
         process.recordPayload(arguments);
-        var nativeResponse = NativeHostDispatcher.dispatch(this, process, module, method, arguments == null ? List.of() : arguments);
+        var safeArguments = arguments == null ? List.of() : arguments;
+        var resetBudget = resetsStatementBudget(module, method);
+        var currentContext = context;
+        if (resetBudget && currentContext != null) currentContext.resetLimits();
+
+        var nativeResponse = NativeHostDispatcher.dispatch(this, process, module, method, safeArguments);
         if (nativeResponse != null) {
             if (nativeResponse.ok()) process.recordPayload(nativeResponse.values());
+            if (resetBudget && currentContext != null) currentContext.resetLimits();
             return nativeResponse;
         }
 
-        var response = process.eventLoop().hostCall(module, method, arguments == null ? List.of() : arguments);
+        var response = process.eventLoop().hostCall(module, method, safeArguments);
         if (response.ok()) process.recordPayload(response.values());
+        if (resetBudget && currentContext != null) currentContext.resetLimits();
         return response;
+    }
+
+    private boolean resetsStatementBudget(String module, String method) {
+        if (module == null || method == null) return false;
+
+        return switch (module) {
+            case "__global" -> method.equals("sleep") || method.equals("read");
+            case "os" -> method.equals("pull_event") || method.equals("pull_event_raw");
+            case "__midi" -> method.equals("play_audio_song") || method.equals("play_soundfont_song") || method.equals("play_hifi_soundfont_song");
+            default -> false;
+        };
     }
 
     public void requestLimitKill(String reason) {
