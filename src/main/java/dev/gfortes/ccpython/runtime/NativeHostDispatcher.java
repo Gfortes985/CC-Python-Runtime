@@ -31,6 +31,7 @@ import dev.gfortes.ccpython.monitor.MonitorPalette;
 import dev.gfortes.ccpython.util.LuaValues;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.InputStream;
 import java.io.IOException;
 import java.lang.reflect.Field;
@@ -43,6 +44,7 @@ import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -63,6 +65,7 @@ import javax.sound.midi.Synthesizer;
 import javax.sound.sampled.AudioFormat;
 import javax.sound.sampled.AudioInputStream;
 import net.minecraft.server.level.ServerLevel;
+import net.neoforged.fml.ModList;
 
 final class NativeHostDispatcher {
     private static final int MIDI_AUDIO_CHUNK_SAMPLES = 48_000;
@@ -986,10 +989,7 @@ final class NativeHostDispatcher {
         Path outputPath = Files.createTempFile("ccpython-midi-render-", ".pcm");
         try {
             String javaExecutable = Path.of(System.getProperty("java.home"), "bin", isWindows() ? "java.exe" : "java").toString();
-            String classPath = System.getProperty("java.class.path", "");
-            if (classPath.isBlank()) {
-                throw new LuaException("Current Java classpath is empty; cannot launch MIDI renderer.");
-            }
+            String classPath = buildSoundfontRendererClasspath();
             var command = new ArrayList<String>();
             command.add(javaExecutable);
             command.add("--add-exports=java.desktop/com.sun.media.sound=ALL-UNNAMED");
@@ -1041,6 +1041,54 @@ final class NativeHostDispatcher {
         } catch (Exception exception) {
             Files.deleteIfExists(outputPath);
             throw exception;
+        }
+    }
+
+    private static String buildSoundfontRendererClasspath() throws LuaException {
+        var entries = new LinkedHashSet<String>();
+        addModFileClasspathEntry(entries);
+        addRendererClasspathEntry(entries, MidiSoundfontRendererMain.class);
+        addRendererClasspathEntry(entries, NativeHostDispatcher.class);
+
+        String currentClassPath = System.getProperty("java.class.path", "");
+        if (!currentClassPath.isBlank()) {
+            for (String entry : currentClassPath.split(java.util.regex.Pattern.quote(File.pathSeparator))) {
+                if (!entry.isBlank()) entries.add(entry);
+            }
+        }
+
+        if (entries.isEmpty()) {
+            throw new LuaException("Could not resolve a classpath for the MIDI renderer helper.");
+        }
+        return String.join(File.pathSeparator, entries);
+    }
+
+    private static void addModFileClasspathEntry(LinkedHashSet<String> entries) {
+        try {
+            var modList = ModList.get();
+            if (modList == null) return;
+
+            var modFileInfo = modList.getModFileById(CCPythonMod.MOD_ID);
+            if (modFileInfo == null || modFileInfo.getFile() == null) return;
+
+            Path filePath = modFileInfo.getFile().getFilePath();
+            if (filePath != null) {
+                entries.add(filePath.normalize().toString());
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private static void addRendererClasspathEntry(LinkedHashSet<String> entries, Class<?> owner) {
+        try {
+            var protectionDomain = owner.getProtectionDomain();
+            if (protectionDomain == null) return;
+            var codeSource = protectionDomain.getCodeSource();
+            if (codeSource == null || codeSource.getLocation() == null) return;
+
+            Path location = Path.of(codeSource.getLocation().toURI()).normalize();
+            entries.add(location.toString());
+        } catch (Exception ignored) {
         }
     }
 
