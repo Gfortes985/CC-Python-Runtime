@@ -4,6 +4,7 @@ import com.mojang.logging.LogUtils;
 import dan200.computercraft.api.ComputerCraftAPI;
 import dev.gfortes.ccpython.api.PythonLuaApi;
 import dev.gfortes.ccpython.audio.SpeakerHiFiAudioManager;
+import dev.gfortes.ccpython.bridge.DevBridgeManager;
 import dev.gfortes.ccpython.config.CCPythonConfig;
 import dev.gfortes.ccpython.monitor.MonitorGraphicsManager;
 import dev.gfortes.ccpython.network.PacketHandler;
@@ -41,12 +42,14 @@ public final class CCPythonMod {
     private void onServerStarted(ServerStartedEvent event) {
         SandboxManager.getInstance().warmUpAsync();
         MonitorGraphicsManager.getInstance().initializeServer(event.getServer());
+        DevBridgeManager.getInstance().start(event.getServer());
     }
 
     private void onServerStopping(ServerStoppingEvent event) {
         PythonRuntimeManager.getInstance().shutdownServer(event.getServer());
         MonitorGraphicsManager.getInstance().shutdownServer(event.getServer());
         SpeakerHiFiAudioManager.clearServer();
+        DevBridgeManager.getInstance().stop();
     }
 
     private void onPlayerLoggedIn(PlayerEvent.PlayerLoggedInEvent event) {

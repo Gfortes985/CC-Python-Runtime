@@ -1,0 +1,223 @@
+{
+  "name": "ccpython-bridge",
+  "displayName": "CCPython Bridge",
+  "description": "VS Code integration for CCPython computers over the built-in dev bridge.",
+  "version": "0.0.1",
+  "publisher": "gfortes",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:python",
+    "onView:ccpythonComputers",
+    "onCommand:ccpython.configureBridge",
+    "onCommand:ccpython.connectLocalBridge",
+    "onCommand:ccpython.pingBridge",
+    "onCommand:ccpython.refreshComputers",
+    "onCommand:ccpython.openComputerWorkspace",
+    "onCommand:ccpython.openFile",
+    "onCommand:ccpython.previewImage",
+    "onCommand:ccpython.openFileLocally",
+    "onCommand:ccpython.uploadFiles",
+    "onCommand:ccpython.downloadFile",
+    "onCommand:ccpython.powerOnComputer",
+    "onCommand:ccpython.shutdownComputer",
+    "onCommand:ccpython.rebootComputer"
+  ],
+  "main": "./src/extension.js",
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "ccpython",
+          "title": "CCPython",
+          "icon": "media/bridge.svg"
+        }
+      ]
+    },
+    "views": {
+      "ccpython": [
+        {
+          "id": "ccpythonComputers",
+          "name": "Computers"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "ccpython.connectLocalBridge",
+        "category": "CCPython",
+        "title": "Connect to Local Bridge",
+        "shortTitle": "Connect"
+      },
+      {
+        "command": "ccpython.configureBridge",
+        "category": "CCPython",
+        "title": "Configure Bridge",
+        "shortTitle": "Configure"
+      },
+      {
+        "command": "ccpython.pingBridge",
+        "category": "CCPython",
+        "title": "Ping Bridge",
+        "shortTitle": "Ping"
+      },
+      {
+        "command": "ccpython.refreshComputers",
+        "category": "CCPython",
+        "title": "Refresh Computers",
+        "shortTitle": "Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "ccpython.openComputerWorkspace",
+        "category": "CCPython",
+        "title": "Open Computer as Workspace",
+        "shortTitle": "Open Workspace"
+      },
+      {
+        "command": "ccpython.openFile",
+        "category": "CCPython",
+        "title": "Open File",
+        "shortTitle": "Open"
+      },
+      {
+        "command": "ccpython.previewImage",
+        "category": "CCPython",
+        "title": "Preview Image",
+        "shortTitle": "Preview"
+      },
+      {
+        "command": "ccpython.openFileLocally",
+        "category": "CCPython",
+        "title": "Open File Locally",
+        "shortTitle": "Open Locally"
+      },
+      {
+        "command": "ccpython.uploadFiles",
+        "category": "CCPython",
+        "title": "Upload Files",
+        "shortTitle": "Upload"
+      },
+      {
+        "command": "ccpython.downloadFile",
+        "category": "CCPython",
+        "title": "Download File",
+        "shortTitle": "Download"
+      },
+      {
+        "command": "ccpython.powerOnComputer",
+        "category": "CCPython",
+        "title": "Turn On Computer",
+        "shortTitle": "Turn On"
+      },
+      {
+        "command": "ccpython.shutdownComputer",
+        "category": "CCPython",
+        "title": "Shut Down Computer",
+        "shortTitle": "Shut Down"
+      },
+      {
+        "command": "ccpython.rebootComputer",
+        "category": "CCPython",
+        "title": "Reboot Computer",
+        "shortTitle": "Reboot"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "ccpython.connectLocalBridge",
+          "when": "view == ccpythonComputers",
+          "group": "secondary@1"
+        },
+        {
+          "command": "ccpython.configureBridge",
+          "when": "view == ccpythonComputers",
+          "group": "secondary@2"
+        },
+        {
+          "command": "ccpython.pingBridge",
+          "when": "view == ccpythonComputers",
+          "group": "secondary@3"
+        },
+        {
+          "command": "ccpython.refreshComputers",
+          "when": "view == ccpythonComputers",
+          "group": "navigation@4"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "ccpython.openComputerWorkspace",
+          "when": "view == ccpythonComputers && viewItem == computer",
+          "group": "inline"
+        },
+        {
+          "command": "ccpython.uploadFiles",
+          "when": "view == ccpythonComputers && viewItem == computer",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ccpython.powerOnComputer",
+          "when": "view == ccpythonComputers && viewItem == computer",
+          "group": "navigation@2"
+        },
+        {
+          "command": "ccpython.shutdownComputer",
+          "when": "view == ccpythonComputers && viewItem == computer",
+          "group": "navigation@3"
+        },
+        {
+          "command": "ccpython.rebootComputer",
+          "when": "view == ccpythonComputers && viewItem == computer",
+          "group": "navigation@4"
+        },
+        {
+          "command": "ccpython.uploadFiles",
+          "when": "view == ccpythonComputers && viewItem == directory",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ccpython.openFile",
+          "when": "view == ccpythonComputers && viewItem == file",
+          "group": "navigation"
+        },
+        {
+          "command": "ccpython.previewImage",
+          "when": "view == ccpythonComputers && viewItem == imageFile",
+          "group": "navigation@2"
+        },
+        {
+          "command": "ccpython.openFileLocally",
+          "when": "view == ccpythonComputers && (viewItem == file || viewItem == imageFile)",
+          "group": "navigation@3"
+        },
+        {
+          "command": "ccpython.downloadFile",
+          "when": "view == ccpythonComputers && (viewItem == file || viewItem == imageFile)",
+          "group": "navigation@4"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "CCPython Bridge",
+      "properties": {
+        "ccpythonBridge.baseUrl": {
+          "type": "string",
+          "default": "http://127.0.0.1:26780/ccpython/bridge/v1",
+          "description": "Base URL for the CCPython bridge."
+        },
+        "ccpythonBridge.authToken": {
+          "type": "string",
+          "default": "",
+          "description": "Optional Bearer token for remote bridge access."
+        }
+      }
+    }
+  }
+}

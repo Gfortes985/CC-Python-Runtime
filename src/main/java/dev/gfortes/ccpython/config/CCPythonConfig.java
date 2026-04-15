@@ -20,6 +20,11 @@ public final class CCPythonConfig {
     public static final ModConfigSpec.LongValue MAX_BRIDGE_PAYLOAD_BYTES;
     public static final ModConfigSpec.IntValue MAX_OPEN_FILE_HANDLES_PER_PROCESS;
     public static final ModConfigSpec.ConfigValue<String> DEFAULT_MIDI_SOUNDFONT;
+    public static final ModConfigSpec.BooleanValue ENABLE_DEV_BRIDGE;
+    public static final ModConfigSpec.ConfigValue<String> DEV_BRIDGE_HOST;
+    public static final ModConfigSpec.IntValue DEV_BRIDGE_PORT;
+    public static final ModConfigSpec.BooleanValue DEV_BRIDGE_ALLOW_REMOTE;
+    public static final ModConfigSpec.ConfigValue<String> DEV_BRIDGE_AUTH_TOKEN;
     public static final ModConfigSpec.BooleanValue ENABLE_RELAXED_SINGLEPLAYER_LIMITS;
     public static final ModConfigSpec.IntValue SINGLEPLAYER_MAX_PROCESSES_PER_COMPUTER;
     public static final ModConfigSpec.IntValue SINGLEPLAYER_MAX_PARALLEL_RUNTIMES;
@@ -66,6 +71,36 @@ public final class CCPythonConfig {
                 "Leave empty to auto-detect the first .sf2 file from config/ccpython/soundfonts."
             )
             .define("defaultSoundfont", "");
+        builder.pop();
+
+        builder.push("devBridge");
+        ENABLE_DEV_BRIDGE = builder
+            .comment(
+                "Enable the external editor bridge HTTP API.",
+                "When remote access is disabled, the bridge binds only to 127.0.0.1 and is intended for local VS Code workflows."
+            )
+            .define("enabled", true);
+        DEV_BRIDGE_HOST = builder
+            .comment(
+                "Host/interface to bind the bridge to when remote access is enabled.",
+                "Ignored while remote access is disabled."
+            )
+            .define("host", "0.0.0.0");
+        DEV_BRIDGE_PORT = builder
+            .comment("TCP port used by the external editor bridge.")
+            .defineInRange("port", 26780, 1, 65535);
+        DEV_BRIDGE_ALLOW_REMOTE = builder
+            .comment(
+                "Allow non-localhost bridge connections.",
+                "Keep this disabled for normal singleplayer use. When enabled, remote requests require devBridge.authToken."
+            )
+            .define("allowRemote", false);
+        DEV_BRIDGE_AUTH_TOKEN = builder
+            .comment(
+                "Bearer token used for remote bridge requests.",
+                "Localhost requests stay trusted even when allowRemote is enabled."
+            )
+            .define("authToken", "");
         builder.pop();
 
         builder.push("singleplayer");
@@ -138,6 +173,26 @@ public final class CCPythonConfig {
 
     public static String defaultMidiSoundfont() {
         return DEFAULT_MIDI_SOUNDFONT.get().trim();
+    }
+
+    public static boolean devBridgeEnabled() {
+        return ENABLE_DEV_BRIDGE.get();
+    }
+
+    public static String devBridgeHost() {
+        return DEV_BRIDGE_HOST.get().trim();
+    }
+
+    public static int devBridgePort() {
+        return DEV_BRIDGE_PORT.get();
+    }
+
+    public static boolean devBridgeAllowRemote() {
+        return DEV_BRIDGE_ALLOW_REMOTE.get();
+    }
+
+    public static String devBridgeAuthToken() {
+        return DEV_BRIDGE_AUTH_TOKEN.get().trim();
     }
 
     public static Path soundfontConfigDirectory() {
