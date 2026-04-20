@@ -16,14 +16,33 @@
     "onView:ccpythonComputers",
     "onCommand:ccpython.configureBridge",
     "onCommand:ccpython.connectLocalBridge",
+    "onCommand:ccpython.completeBridgePairing",
+    "onCommand:ccpython.startBridgePairing",
     "onCommand:ccpython.pingBridge",
     "onCommand:ccpython.refreshComputers",
+    "onCommand:ccpython.showComputerAccess",
+    "onCommand:ccpython.claimComputerOwnership",
+    "onCommand:ccpython.grantComputerAccess",
+    "onCommand:ccpython.revokeComputerAccess",
+    "onCommand:ccpython.setComputerOwner",
+    "onCommand:ccpython.selectCurrentComputer",
     "onCommand:ccpython.openComputerWorkspace",
+    "onCommand:ccpython.openStartup",
+    "onCommand:ccpython.createNewScript",
     "onCommand:ccpython.openFile",
     "onCommand:ccpython.previewImage",
+    "onCommand:ccpython.inspectDataFile",
+    "onCommand:ccpython.previewMidi",
     "onCommand:ccpython.openFileLocally",
     "onCommand:ccpython.uploadFiles",
+    "onCommand:ccpython.uploadFolder",
     "onCommand:ccpython.downloadFile",
+    "onCommand:ccpython.searchComputerFiles",
+    "onCommand:ccpython.bindWorkspaceToCurrentComputer",
+    "onCommand:ccpython.generateApiStubs",
+    "onCommand:ccpython.runPythonFile",
+    "onCommand:ccpython.stopPython",
+    "onCommand:ccpython.openConsole",
     "onCommand:ccpython.powerOnComputer",
     "onCommand:ccpython.shutdownComputer",
     "onCommand:ccpython.rebootComputer"
@@ -61,6 +80,18 @@
         "shortTitle": "Configure"
       },
       {
+        "command": "ccpython.startBridgePairing",
+        "category": "CCPython",
+        "title": "Start Bridge Pairing",
+        "shortTitle": "Start Pairing"
+      },
+      {
+        "command": "ccpython.completeBridgePairing",
+        "category": "CCPython",
+        "title": "Complete Bridge Pairing",
+        "shortTitle": "Complete Pairing"
+      },
+      {
         "command": "ccpython.pingBridge",
         "category": "CCPython",
         "title": "Ping Bridge",
@@ -74,10 +105,58 @@
         "icon": "$(refresh)"
       },
       {
+        "command": "ccpython.showComputerAccess",
+        "category": "CCPython",
+        "title": "Show Computer Access",
+        "shortTitle": "Access"
+      },
+      {
+        "command": "ccpython.claimComputerOwnership",
+        "category": "CCPython",
+        "title": "Claim Computer Ownership",
+        "shortTitle": "Claim Owner"
+      },
+      {
+        "command": "ccpython.grantComputerAccess",
+        "category": "CCPython",
+        "title": "Grant Computer Access",
+        "shortTitle": "Grant Access"
+      },
+      {
+        "command": "ccpython.revokeComputerAccess",
+        "category": "CCPython",
+        "title": "Revoke Computer Access",
+        "shortTitle": "Revoke Access"
+      },
+      {
+        "command": "ccpython.setComputerOwner",
+        "category": "CCPython",
+        "title": "Set Computer Owner",
+        "shortTitle": "Set Owner"
+      },
+      {
+        "command": "ccpython.selectCurrentComputer",
+        "category": "CCPython",
+        "title": "Select Current Computer",
+        "shortTitle": "Current Computer"
+      },
+      {
         "command": "ccpython.openComputerWorkspace",
         "category": "CCPython",
         "title": "Open Computer as Workspace",
         "shortTitle": "Open Workspace"
+      },
+      {
+        "command": "ccpython.openStartup",
+        "category": "CCPython",
+        "title": "Open Startup",
+        "shortTitle": "Startup"
+      },
+      {
+        "command": "ccpython.createNewScript",
+        "category": "CCPython",
+        "title": "Create New Script",
+        "shortTitle": "New Script"
       },
       {
         "command": "ccpython.openFile",
@@ -92,6 +171,18 @@
         "shortTitle": "Preview"
       },
       {
+        "command": "ccpython.inspectDataFile",
+        "category": "CCPython",
+        "title": "Inspect Data File",
+        "shortTitle": "Inspect"
+      },
+      {
+        "command": "ccpython.previewMidi",
+        "category": "CCPython",
+        "title": "Preview MIDI",
+        "shortTitle": "MIDI"
+      },
+      {
         "command": "ccpython.openFileLocally",
         "category": "CCPython",
         "title": "Open File Locally",
@@ -104,10 +195,55 @@
         "shortTitle": "Upload"
       },
       {
+        "command": "ccpython.uploadFolder",
+        "category": "CCPython",
+        "title": "Upload Folder",
+        "shortTitle": "Upload Folder"
+      },
+      {
         "command": "ccpython.downloadFile",
         "category": "CCPython",
         "title": "Download File",
         "shortTitle": "Download"
+      },
+      {
+        "command": "ccpython.searchComputerFiles",
+        "category": "CCPython",
+        "title": "Search Computer Files",
+        "shortTitle": "Search"
+      },
+      {
+        "command": "ccpython.bindWorkspaceToCurrentComputer",
+        "category": "CCPython",
+        "title": "Bind Workspace to Current Computer",
+        "shortTitle": "Bind Workspace"
+      },
+      {
+        "command": "ccpython.generateApiStubs",
+        "category": "CCPython",
+        "title": "Generate API Stubs",
+        "shortTitle": "Generate Stubs"
+      },
+      {
+        "command": "ccpython.runPythonFile",
+        "category": "CCPython",
+        "title": "Run Python File",
+        "shortTitle": "Run",
+        "icon": "$(play)"
+      },
+      {
+        "command": "ccpython.stopPython",
+        "category": "CCPython",
+        "title": "Stop Python",
+        "shortTitle": "Stop",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "ccpython.openConsole",
+        "category": "CCPython",
+        "title": "Open Console",
+        "shortTitle": "Console",
+        "icon": "$(terminal)"
       },
       {
         "command": "ccpython.powerOnComputer",
@@ -136,46 +272,166 @@
           "group": "secondary@1"
         },
         {
-          "command": "ccpython.configureBridge",
+          "command": "ccpython.startBridgePairing",
           "when": "view == ccpythonComputers",
           "group": "secondary@2"
         },
         {
-          "command": "ccpython.pingBridge",
+          "command": "ccpython.completeBridgePairing",
           "when": "view == ccpythonComputers",
           "group": "secondary@3"
         },
         {
+          "command": "ccpython.configureBridge",
+          "when": "view == ccpythonComputers",
+          "group": "secondary@4"
+        },
+        {
+          "command": "ccpython.pingBridge",
+          "when": "view == ccpythonComputers",
+          "group": "secondary@5"
+        },
+        {
+          "command": "ccpython.selectCurrentComputer",
+          "when": "view == ccpythonComputers",
+          "group": "secondary@6"
+        },
+        {
+          "command": "ccpython.showComputerAccess",
+          "when": "view == ccpythonComputers",
+          "group": "secondary@7"
+        },
+        {
+          "command": "ccpython.searchComputerFiles",
+          "when": "view == ccpythonComputers",
+          "group": "secondary@8"
+        },
+        {
+          "command": "ccpython.bindWorkspaceToCurrentComputer",
+          "when": "view == ccpythonComputers",
+          "group": "secondary@9"
+        },
+        {
+          "command": "ccpython.generateApiStubs",
+          "when": "view == ccpythonComputers",
+          "group": "secondary@10"
+        },
+        {
           "command": "ccpython.refreshComputers",
+          "when": "view == ccpythonComputers",
+          "group": "navigation@1"
+        },
+        {
+          "command": "ccpython.openConsole",
+          "when": "view == ccpythonComputers",
+          "group": "navigation@2"
+        },
+        {
+          "command": "ccpython.runPythonFile",
+          "when": "view == ccpythonComputers",
+          "group": "navigation@3"
+        },
+        {
+          "command": "ccpython.createNewScript",
           "when": "view == ccpythonComputers",
           "group": "navigation@4"
         }
       ],
       "view/item/context": [
         {
-          "command": "ccpython.openComputerWorkspace",
+          "command": "ccpython.selectCurrentComputer",
           "when": "view == ccpythonComputers && viewItem == computer",
           "group": "inline"
         },
         {
-          "command": "ccpython.uploadFiles",
+          "command": "ccpython.openComputerWorkspace",
+          "when": "view == ccpythonComputers && viewItem == computer",
+          "group": "inline@2"
+        },
+        {
+          "command": "ccpython.openConsole",
+          "when": "view == ccpythonComputers && viewItem == computer",
+          "group": "inline@3"
+        },
+        {
+          "command": "ccpython.searchComputerFiles",
           "when": "view == ccpythonComputers && viewItem == computer",
           "group": "navigation@1"
         },
         {
-          "command": "ccpython.powerOnComputer",
+          "command": "ccpython.showComputerAccess",
           "when": "view == ccpythonComputers && viewItem == computer",
           "group": "navigation@2"
         },
         {
-          "command": "ccpython.shutdownComputer",
+          "command": "ccpython.uploadFiles",
           "when": "view == ccpythonComputers && viewItem == computer",
           "group": "navigation@3"
         },
         {
-          "command": "ccpython.rebootComputer",
+          "command": "ccpython.uploadFolder",
           "when": "view == ccpythonComputers && viewItem == computer",
           "group": "navigation@4"
+        },
+        {
+          "command": "ccpython.bindWorkspaceToCurrentComputer",
+          "when": "view == ccpythonComputers && viewItem == computer",
+          "group": "navigation@5"
+        },
+        {
+          "command": "ccpython.openStartup",
+          "when": "view == ccpythonComputers && viewItem == computer",
+          "group": "navigation@6"
+        },
+        {
+          "command": "ccpython.createNewScript",
+          "when": "view == ccpythonComputers && viewItem == computer",
+          "group": "navigation@7"
+        },
+        {
+          "command": "ccpython.runPythonFile",
+          "when": "view == ccpythonComputers && viewItem == computer",
+          "group": "navigation@8"
+        },
+        {
+          "command": "ccpython.stopPython",
+          "when": "view == ccpythonComputers && viewItem == computer",
+          "group": "navigation@9"
+        },
+        {
+          "command": "ccpython.powerOnComputer",
+          "when": "view == ccpythonComputers && viewItem == computer",
+          "group": "navigation@10"
+        },
+        {
+          "command": "ccpython.shutdownComputer",
+          "when": "view == ccpythonComputers && viewItem == computer",
+          "group": "navigation@11"
+        },
+        {
+          "command": "ccpython.rebootComputer",
+          "when": "view == ccpythonComputers && viewItem == computer",
+          "group": "navigation@12"
+        },
+        {
+          "command": "ccpython.claimComputerOwnership",
+          "when": "view == ccpythonComputers && viewItem == computer",
+          "group": "navigation@13"
+        },
+        {
+          "command": "ccpython.grantComputerAccess",
+          "when": "view == ccpythonComputers && viewItem == computer",
+          "group": "navigation@14"
+        },
+        {
+          "command": "ccpython.revokeComputerAccess",
+          "when": "view == ccpythonComputers && viewItem == computer",
+          "group": "navigation@15"
+        },
+        {
+          "command": "ccpython.setComputerOwner",
+          "when": "view == ccpythonComputers && viewItem == computer",
+          "group": "navigation@16"
         },
         {
           "command": "ccpython.uploadFiles",
@@ -183,8 +439,33 @@
           "group": "navigation@1"
         },
         {
+          "command": "ccpython.uploadFolder",
+          "when": "view == ccpythonComputers && viewItem == directory",
+          "group": "navigation@2"
+        },
+        {
+          "command": "ccpython.searchComputerFiles",
+          "when": "view == ccpythonComputers && viewItem == directory",
+          "group": "navigation@3"
+        },
+        {
+          "command": "ccpython.bindWorkspaceToCurrentComputer",
+          "when": "view == ccpythonComputers && viewItem == directory",
+          "group": "navigation@4"
+        },
+        {
+          "command": "ccpython.createNewScript",
+          "when": "view == ccpythonComputers && viewItem == directory",
+          "group": "navigation@5"
+        },
+        {
           "command": "ccpython.openFile",
           "when": "view == ccpythonComputers && viewItem == file",
+          "group": "navigation"
+        },
+        {
+          "command": "ccpython.openFile",
+          "when": "view == ccpythonComputers && viewItem == dataFile",
           "group": "navigation"
         },
         {
@@ -193,17 +474,33 @@
           "group": "navigation@2"
         },
         {
-          "command": "ccpython.openFileLocally",
-          "when": "view == ccpythonComputers && (viewItem == file || viewItem == imageFile)",
+          "command": "ccpython.inspectDataFile",
+          "when": "view == ccpythonComputers && viewItem == dataFile",
           "group": "navigation@3"
         },
         {
-          "command": "ccpython.downloadFile",
-          "when": "view == ccpythonComputers && (viewItem == file || viewItem == imageFile)",
+          "command": "ccpython.previewMidi",
+          "when": "view == ccpythonComputers && viewItem == midiFile",
           "group": "navigation@4"
+        },
+        {
+          "command": "ccpython.openFileLocally",
+          "when": "view == ccpythonComputers && (viewItem == file || viewItem == imageFile || viewItem == dataFile || viewItem == midiFile)",
+          "group": "navigation@5"
+        },
+        {
+          "command": "ccpython.downloadFile",
+          "when": "view == ccpythonComputers && (viewItem == file || viewItem == imageFile || viewItem == dataFile || viewItem == midiFile)",
+          "group": "navigation@6"
         }
       ]
     },
+    "snippets": [
+      {
+        "language": "python",
+        "path": "./snippets/python.json"
+      }
+    ],
     "configuration": {
       "title": "CCPython Bridge",
       "properties": {

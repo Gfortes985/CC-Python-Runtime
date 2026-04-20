@@ -32,6 +32,16 @@ const KEY_CONSTANTS = [
     "leftShift", "leftCtrl", "leftAlt", "leftSuper", "rightShift", "rightCtrl", "rightAlt", "menu", "return_"
 ];
 
+const UNSUPPORTED_MODULES = new Set([
+    "socket",
+    "subprocess",
+    "multiprocessing",
+    "threading",
+    "tkinter",
+    "asyncio",
+    "selectors"
+]);
+
 function moduleMember(label, documentation) {
     return {
         label,
@@ -362,6 +372,48 @@ const HANDLE_SCHEMAS = {
     ]
 };
 
+const PERIPHERAL_SCHEMAS = {
+    speaker: [
+        method("play_note", "speaker.play_note(instrument, volume=1.0, pitch=1.0)", "Play a speaker note event."),
+        method("play_sound", "speaker.play_sound(name, volume=1.0, pitch=1.0)", "Play a Minecraft sound event."),
+        method("play_audio", "speaker.play_audio(samples, volume=1.0)", "Play 8-bit speaker audio."),
+        method("play_audio16", "speaker.play_audio16(samples, sample_rate=48000, volume=1.0)", "Play hi-fi 16-bit speaker audio."),
+        method("play_hifi_audio", "speaker.play_hifi_audio(samples, sample_rate=48000, volume=1.0)", "Alias for play_audio16."),
+        method("stop", "speaker.stop()", "Stop the current speaker playback.")
+    ],
+    monitor: [
+        method("clear", "monitor.clear()", "Clear the monitor."),
+        method("write", "monitor.write(text)", "Write text to the monitor."),
+        method("blit", "monitor.blit(text, text_colors, background_colors)", "Write colored text to the monitor."),
+        method("get_size", "monitor.get_size()", "Return monitor width and height."),
+        method("set_cursor_pos", "monitor.set_cursor_pos(x, y)", "Move the monitor cursor."),
+        method("get_cursor_pos", "monitor.get_cursor_pos()", "Return the cursor position."),
+        method("set_text_scale", "monitor.set_text_scale(scale)", "Change the monitor text scale."),
+        method("set_text_color", "monitor.set_text_color(color)", "Set monitor text color."),
+        method("set_background_color", "monitor.set_background_color(color)", "Set monitor background color.")
+    ],
+    modem: [
+        method("open", "modem.open(channel)", "Open a modem channel."),
+        method("close", "modem.close(channel=None)", "Close one or all modem channels."),
+        method("is_open", "modem.is_open(channel)", "Check whether a channel is open."),
+        method("transmit", "modem.transmit(channel, reply_channel, message)", "Transmit a modem message."),
+        method("is_wireless", "modem.is_wireless()", "Return whether the modem is wireless.")
+    ],
+    drive: [
+        method("is_disk_present", "drive.is_disk_present()", "Return whether a disk is inserted."),
+        method("get_disk_label", "drive.get_disk_label()", "Return the current disk label."),
+        method("set_disk_label", "drive.set_disk_label(label)", "Set the current disk label."),
+        method("get_mount_path", "drive.get_mount_path()", "Return the mounted filesystem path for the disk."),
+        method("has_data", "drive.has_data()", "Return whether the disk contains data."),
+        method("has_audio", "drive.has_audio()", "Return whether the disk contains an audio record."),
+        method("get_audio_title", "drive.get_audio_title()", "Return the record title."),
+        method("play_audio", "drive.play_audio()", "Start record playback."),
+        method("stop_audio", "drive.stop_audio()", "Stop record playback."),
+        method("eject_disk", "drive.eject_disk()", "Eject the disk."),
+        method("get_disk_id", "drive.get_disk_id()", "Return the disk id, if present.")
+    ]
+};
+
 const ROOT_MEMBERS = [
     moduleMember("fs", "CraftOS filesystem helpers."),
     moduleMember("os", "CraftOS event and computer helpers."),
@@ -402,9 +454,42 @@ function registerApiIntelligence(context) {
         }
     };
 
+    const hoverProvider = {
+        provideHover(document, position) {
+            const definition = resolveHoverDefinition(document, position);
+            if (!definition) return undefined;
+
+            const markdown = new vscode.MarkdownString(undefined, true);
+            if (definition.detail) {
+                markdown.appendCodeblock(definition.detail, "python");
+            }
+            if (definition.documentation) {
+                if (definition.detail) markdown.appendMarkdown("\n\n");
+                markdown.appendMarkdown(definition.documentation);
+            }
+
+            return new vscode.Hover(markdown);
+        }
+    };
+
+    const diagnostics = vscode.languages.createDiagnosticCollection("ccpython");
+    const refreshDiagnostics = document => updateDiagnostics(document, diagnostics);
+
     context.subscriptions.push(
         vscode.languages.registerCompletionItemProvider(PYTHON_SELECTORS, completionProvider, ".")
     );
+    context.subscriptions.push(
+        vscode.languages.registerHoverProvider(PYTHON_SELECTORS, hoverProvider)
+    );
+    context.subscriptions.push(diagnostics);
+    context.subscriptions.push(vscode.workspace.onDidOpenTextDocument(refreshDiagnostics));
+    context.subscriptions.push(vscode.workspace.onDidChangeTextDocument(event => refreshDiagnostics(event.document)));
+    context.subscriptions.push(vscode.workspace.onDidSaveTextDocument(refreshDiagnostics));
+    context.subscriptions.push(vscode.workspace.onDidCloseTextDocument(document => diagnostics.delete(document.uri)));
+
+    for (const document of vscode.workspace.textDocuments) {
+        refreshDiagnostics(document);
+    }
 }
 
 function resolveCompletionContext(document, position) {
@@ -439,6 +524,12 @@ function resolveCompletionContext(document, position) {
     const handleType = variableTypes.get(objectName);
     if (handleType && HANDLE_SCHEMAS[handleType]) {
         return { items: HANDLE_SCHEMAS[handleType], partial };
+    }
+    if (handleType && handleType.startsWith("Peripheral:")) {
+        const peripheralType = handleType.slice("Peripheral:".length);
+        if (PERIPHERAL_SCHEMAS[peripheralType]) {
+            return { items: PERIPHERAL_SCHEMAS[peripheralType], partial };
+        }
     }
 
     return null;
@@ -522,10 +613,41 @@ function inferVariableTypes(textBefore, aliases) {
 
         if (matchesModuleCall(expression, aliases, "vector", ["new"])) {
             variableTypes.set(variableName, "Vector");
+            continue;
+        }
+
+        const peripheralType = inferPeripheralType(variableName, expression, aliases);
+        if (peripheralType) {
+            variableTypes.set(variableName, `Peripheral:${peripheralType}`);
         }
     }
 
     return variableTypes;
+}
+
+function inferPeripheralType(variableName, expression, aliases) {
+    const explicit = matchPeripheralFind(expression, aliases);
+    if (explicit) return explicit;
+
+    const lowered = variableName.toLowerCase();
+    for (const type of Object.keys(PERIPHERAL_SCHEMAS)) {
+        if (lowered.includes(type)) return type;
+    }
+
+    return null;
+}
+
+function matchPeripheralFind(expression, aliases) {
+    const prefixes = modulePrefixes(aliases, "peripheral");
+    for (const prefix of prefixes) {
+        const escaped = escapeRegExp(prefix);
+        const findPattern = new RegExp(`^${escaped}find\\((['"])(speaker|monitor|modem|drive)\\1`);
+        const wrapPattern = new RegExp(`^${escaped}wrap\\(`);
+        const findMatch = expression.match(findPattern);
+        if (findMatch) return findMatch[2];
+        if (wrapPattern.test(expression)) return null;
+    }
+    return null;
 }
 
 function matchesModuleCall(expression, aliases, moduleName, methods) {
@@ -613,6 +735,162 @@ function isLikelyCCPythonDocument(document, textBefore) {
     return /\b(import\s+cc\b|from\s+cc\s+import\b)/.test(textBefore);
 }
 
+function resolveHoverDefinition(document, position) {
+    const wordRange = document.getWordRangeAtPosition(position);
+    if (!wordRange) return null;
+
+    const word = document.getText(wordRange);
+    const linePrefix = document.lineAt(position).text.slice(0, wordRange.end.character);
+    const textBefore = document.getText(new vscode.Range(new vscode.Position(0, 0), wordRange.end));
+    const aliases = resolveAliases(textBefore, isLikelyCCPythonDocument(document, textBefore));
+    const variableTypes = inferVariableTypes(textBefore, aliases);
+
+    const attributeMatch = /([A-Za-z_][A-Za-z0-9_]*)\.([A-Za-z0-9_]*)$/.exec(linePrefix);
+    if (attributeMatch) {
+        const objectName = attributeMatch[1];
+        const memberName = attributeMatch[2];
+        if (memberName !== word) return null;
+
+        if (aliases.rootAliases.has(objectName)) {
+            return ROOT_MEMBERS.find(item => item.label === memberName) || null;
+        }
+
+        const moduleName = aliases.moduleAliases.get(objectName);
+        if (moduleName && MODULE_SCHEMAS[moduleName]) {
+            return MODULE_SCHEMAS[moduleName].find(item => item.label === memberName) || null;
+        }
+
+        const handleType = variableTypes.get(objectName);
+        if (handleType && HANDLE_SCHEMAS[handleType]) {
+            return HANDLE_SCHEMAS[handleType].find(item => item.label === memberName) || null;
+        }
+        if (handleType && handleType.startsWith("Peripheral:")) {
+            const peripheralType = handleType.slice("Peripheral:".length);
+            return (PERIPHERAL_SCHEMAS[peripheralType] || []).find(item => item.label === memberName) || null;
+        }
+    }
+
+    if (aliases.rootAliases.has(word)) {
+        return { label: word, kind: vscode.CompletionItemKind.Module, detail: word, documentation: "CCPython root module." };
+    }
+
+    if (aliases.moduleAliases.has(word)) {
+        return ROOT_MEMBERS.find(item => item.label === aliases.moduleAliases.get(word)) || null;
+    }
+
+    return ROOT_MEMBERS.find(item => item.label === word) || null;
+}
+
+function updateDiagnostics(document, collection) {
+    if (!PYTHON_SELECTORS.some(selector => selector.language === document.languageId) || !isLikelyCCPythonDocument(document, document.getText())) {
+        collection.delete(document.uri);
+        return;
+    }
+
+    const diagnostics = [];
+    const text = document.getText();
+    const lines = text.split(/\r?\n/);
+
+    for (let index = 0; index < lines.length; index++) {
+        const line = lines[index];
+        const importMatch = /^\s*(?:from|import)\s+([A-Za-z0-9_\.]+)/.exec(line);
+        if (importMatch && UNSUPPORTED_MODULES.has(importMatch[1].split(".")[0])) {
+            const range = new vscode.Range(index, 0, index, line.length);
+            diagnostics.push(new vscode.Diagnostic(
+                range,
+                `Module '${importMatch[1]}' is usually unavailable or unsafe inside the CCPython runtime.`,
+                vscode.DiagnosticSeverity.Warning
+            ));
+        }
+
+        if (line.length > 200) {
+            diagnostics.push(new vscode.Diagnostic(
+                new vscode.Range(index, 200, index, line.length),
+                "Very long lines are awkward inside CC terminals and traceback views.",
+                vscode.DiagnosticSeverity.Information
+            ));
+        }
+    }
+
+    if (Buffer.byteLength(text, "utf8") > 256 * 1024) {
+        diagnostics.push(new vscode.Diagnostic(
+            new vscode.Range(0, 0, 0, 1),
+            "This file is larger than the typical CCPython source budget. Consider splitting it into modules.",
+            vscode.DiagnosticSeverity.Warning
+        ));
+    }
+
+    collection.set(document.uri, diagnostics);
+}
+
+function generateStubText() {
+    const lines = [
+        '"""Auto-generated CCPython stubs."""',
+        "from __future__ import annotations",
+        "from typing import Any, Iterable, Protocol",
+        "",
+        "class MidiSong(Protocol):",
+        ...renderMembers(HANDLE_SCHEMAS.MidiSong),
+        "",
+        "class ImageHandle(Protocol):",
+        ...renderMembers(HANDLE_SCHEMAS.ImageHandle),
+        "",
+        "class CCFile(Protocol):",
+        ...renderMembers(HANDLE_SCHEMAS.CCFile),
+        "",
+        "class Vector(Protocol):",
+        ...renderMembers(HANDLE_SCHEMAS.Vector),
+        "",
+        "class SpeakerPeripheral(Protocol):",
+        ...renderMembers(PERIPHERAL_SCHEMAS.speaker),
+        "",
+        "class MonitorPeripheral(Protocol):",
+        ...renderMembers(PERIPHERAL_SCHEMAS.monitor),
+        "",
+        "class ModemPeripheral(Protocol):",
+        ...renderMembers(PERIPHERAL_SCHEMAS.modem),
+        "",
+        "class DrivePeripheral(Protocol):",
+        ...renderMembers(PERIPHERAL_SCHEMAS.drive),
+        "",
+        "class _FsModule(Protocol):",
+        ...renderMembers(MODULE_SCHEMAS.fs),
+        "",
+        "class _MidiModule(Protocol):",
+        ...renderMembers(MODULE_SCHEMAS.midi),
+        "",
+        "class _ImageModule(Protocol):",
+        ...renderMembers(MODULE_SCHEMAS.image),
+        "",
+        "class _PeripheralModule(Protocol):",
+        ...renderMembers(MODULE_SCHEMAS.peripheral),
+        "",
+        "fs: _FsModule",
+        "midi: _MidiModule",
+        "image: _ImageModule",
+        "peripheral: _PeripheralModule",
+        "",
+        "def sleep(seconds: float) -> None: ...",
+        "def open(path: str, mode: str = 'r') -> CCFile: ...",
+        "def print(*values: Any) -> None: ...",
+        "def input(prompt: str | None = None) -> str: ...",
+        "def help(topic: str | None = None) -> None: ...",
+        "def exit(code: int | None = None) -> None: ...",
+        "def quit(code: int | None = None) -> None: ..."
+    ];
+
+    return lines.join("\n") + "\n";
+}
+
+function renderMembers(members) {
+    return members.map(member => {
+        if (member.kind === vscode.CompletionItemKind.Property || member.kind === vscode.CompletionItemKind.Constant) {
+            return `    ${member.label}: Any`;
+        }
+        return `    def ${member.label}(self, *args: Any, **kwargs: Any) -> Any: ...`;
+    });
+}
+
 function buildCompletionItems(items, partial) {
     return items
         .filter(item => !partial || item.label.startsWith(partial))
@@ -640,5 +918,6 @@ function escapeRegExp(value) {
 }
 
 module.exports = {
-    registerApiIntelligence
+    registerApiIntelligence,
+    generateStubText
 };

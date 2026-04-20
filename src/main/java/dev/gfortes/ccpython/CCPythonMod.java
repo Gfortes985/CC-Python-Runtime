@@ -2,19 +2,24 @@ package dev.gfortes.ccpython;
 
 import com.mojang.logging.LogUtils;
 import dan200.computercraft.api.ComputerCraftAPI;
+import dan200.computercraft.shared.computer.blocks.AbstractComputerBlockEntity;
 import dev.gfortes.ccpython.api.PythonLuaApi;
 import dev.gfortes.ccpython.audio.SpeakerHiFiAudioManager;
+import dev.gfortes.ccpython.bridge.DevBridgeCommand;
 import dev.gfortes.ccpython.bridge.DevBridgeManager;
 import dev.gfortes.ccpython.config.CCPythonConfig;
 import dev.gfortes.ccpython.monitor.MonitorGraphicsManager;
 import dev.gfortes.ccpython.network.PacketHandler;
 import dev.gfortes.ccpython.runtime.SandboxManager;
 import dev.gfortes.ccpython.runtime.PythonRuntimeManager;
+import net.minecraft.world.level.block.entity.BlockEntity;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.config.ModConfig;
 import net.neoforged.neoforge.common.NeoForge;
+import net.neoforged.neoforge.event.RegisterCommandsEvent;
+import net.neoforged.neoforge.event.level.BlockEvent;
 import net.neoforged.neoforge.event.entity.player.PlayerEvent;
 import net.neoforged.neoforge.event.server.ServerStartedEvent;
 import net.neoforged.neoforge.event.server.ServerStoppingEvent;
@@ -28,6 +33,7 @@ public final class CCPythonMod {
     public CCPythonMod(IEventBus modBus, ModContainer modContainer) {
         ComputerCraftAPI.registerAPIFactory(PythonLuaApi::new);
         CCPythonConfig.ensureSoundfontConfigDirectory();
+        CCPythonConfig.ensureBridgeConfigDirectory();
 
         modBus.addListener(PacketHandler::register);
         modContainer.registerConfig(ModConfig.Type.COMMON, CCPythonConfig.SPEC);
@@ -37,6 +43,8 @@ public final class CCPythonMod {
         NeoForge.EVENT_BUS.addListener(this::onPlayerLoggedIn);
         NeoForge.EVENT_BUS.addListener(this::onPlayerRespawn);
         NeoForge.EVENT_BUS.addListener(this::onPlayerChangedDimension);
+        NeoForge.EVENT_BUS.addListener(this::onBlockPlaced);
+        NeoForge.EVENT_BUS.addListener(this::onRegisterCommands);
     }
 
     private void onServerStarted(ServerStartedEvent event) {
@@ -71,5 +79,26 @@ public final class CCPythonMod {
             PythonRuntimeManager.getInstance().syncPlayer(player);
             MonitorGraphicsManager.getInstance().syncPlayer(player);
         }
+    }
+
+    private void onBlockPlaced(BlockEvent.EntityPlaceEvent event) {
+        if (!(event.getEntity() instanceof net.minecraft.server.level.ServerPlayer player)) return;
+
+        BlockEntity blockEntity = player.serverLevel().getBlockEntity(event.getPos());
+        if (!(blockEntity instanceof AbstractComputerBlockEntity computerBlockEntity)) return;
+
+        var serverComputer = computerBlockEntity.getServerComputer();
+        if (serverComputer == null) serverComputer = computerBlockEntity.createServerComputer();
+        if (serverComputer == null) return;
+
+        DevBridgeManager.getInstance().assignOwnerIfAbsent(
+            serverComputer.getID(),
+            player.getUUID(),
+            player.getGameProfile().getName()
+        );
+    }
+
+    private void onRegisterCommands(RegisterCommandsEvent event) {
+        DevBridgeCommand.register(event.getDispatcher());
     }
 }

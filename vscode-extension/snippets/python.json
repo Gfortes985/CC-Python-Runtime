@@ -1,0 +1,65 @@
+{
+  "CCPython Import": {
+    "prefix": "ccpy",
+    "body": [
+      "import cc",
+      "",
+      "$0"
+    ],
+    "description": "Insert a basic CCPython import block."
+  },
+  "CCPython Speaker": {
+    "prefix": "ccspeaker",
+    "body": [
+      "import cc",
+      "",
+      "speaker = cc.peripheral.find('speaker')",
+      "if not speaker:",
+      "    raise RuntimeError('speaker not found')",
+      "",
+      "$0"
+    ],
+    "description": "Find a speaker peripheral."
+  },
+  "CCPython Monitor": {
+    "prefix": "ccmonitor",
+    "body": [
+      "import cc",
+      "",
+      "monitor = cc.peripheral.find('monitor')",
+      "if not monitor:",
+      "    raise RuntimeError('monitor not found')",
+      "",
+      "$0"
+    ],
+    "description": "Find a monitor peripheral."
+  },
+  "CCPython MIDI Play": {
+    "prefix": "ccmidi",
+    "body": [
+      "import cc",
+      "",
+      "speaker = cc.peripheral.find('speaker')",
+      "song = cc.midi.open('${1:song.mid}')",
+      "print(song.play(speaker, mode='${2:hifi}'))",
+      "$0"
+    ],
+    "description": "Play a MIDI file through the first speaker."
+  },
+  "CCPython Rednet Receive": {
+    "prefix": "ccrednet",
+    "body": [
+      "import cc",
+      "",
+      "modem = cc.peripheral.find('modem')",
+      "if not modem:",
+      "    raise RuntimeError('modem not found')",
+      "",
+      "cc.rednet.open(modem)",
+      "sender, message, protocol = cc.rednet.receive()",
+      "print(sender, message, protocol)",
+      "$0"
+    ],
+    "description": "Open rednet and receive one message."
+  }
+}

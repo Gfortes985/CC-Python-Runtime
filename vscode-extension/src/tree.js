@@ -16,6 +16,34 @@ class EntryNode {
     }
 }
 
+class CCPythonTreeDragAndDropController {
+    constructor(onDropExternalFiles) {
+        this.onDropExternalFiles = onDropExternalFiles;
+        this.dragMimeTypes = [];
+        this.dropMimeTypes = ["text/uri-list"];
+    }
+
+    async handleDrop(target, dataTransfer) {
+        const item = dataTransfer.get("text/uri-list");
+        if (!item) return;
+
+        const raw = await item.asString();
+        const uris = raw
+            .split(/\r?\n/)
+            .map(line => line.trim())
+            .filter(line => line && !line.startsWith("#"))
+            .map(line => vscode.Uri.parse(line));
+
+        if (uris.length > 0) {
+            await this.onDropExternalFiles(target, uris);
+        }
+    }
+
+    handleDrag() {
+        return;
+    }
+}
+
 class CCPythonTreeProvider {
     constructor(client, output) {
         this.client = client;
@@ -62,6 +90,7 @@ class CCPythonTreeProvider {
                 "",
                 `Label: ${element.computer.label || "(none)"}`,
                 `State: ${element.computer.on ? "on" : "off"}`,
+                `Family: ${element.computer.family || "unknown"}`,
                 `Dimension: ${element.computer.dimension}`,
                 `Position: ${element.computer.position.x}, ${element.computer.position.y}, ${element.computer.position.z}`,
                 `Python processes: ${element.computer.python_processes}`
@@ -74,10 +103,10 @@ class CCPythonTreeProvider {
             element.entry.name,
             isDirectory ? vscode.TreeItemCollapsibleState.Collapsed : vscode.TreeItemCollapsibleState.None
         );
-        const isImageFile = !isDirectory && isPreviewableImageName(element.entry.name);
-        item.contextValue = isDirectory ? "directory" : (isImageFile ? "imageFile" : "file");
+        const contextValue = resolveContextValue(element.entry.name, isDirectory);
+        item.contextValue = contextValue;
         item.resourceUri = toComputerUri(element.computer.id, element.entry.path);
-        item.iconPath = new vscode.ThemeIcon(isDirectory ? "folder" : (isImageFile ? "file-media" : "file"));
+        item.iconPath = new vscode.ThemeIcon(iconForContext(contextValue));
         item.description = isDirectory ? "" : formatSize(element.entry.size || 0);
         if (!isDirectory) {
             item.command = {
@@ -98,11 +127,45 @@ function formatSize(bytes) {
 
 function isPreviewableImageName(fileName) {
     const extension = fileName.includes(".") ? fileName.split(".").pop().toLowerCase() : "";
-    return extension === "png" || extension === "jpg" || extension === "jpeg";
+    return extension === "png" || extension === "jpg" || extension === "jpeg" || extension === "gif" || extension === "webp";
+}
+
+function isMidiName(fileName) {
+    const extension = fileName.includes(".") ? fileName.split(".").pop().toLowerCase() : "";
+    return extension === "mid" || extension === "midi";
+}
+
+function isInspectableDataName(fileName) {
+    const extension = fileName.includes(".") ? fileName.split(".").pop().toLowerCase() : "";
+    return extension === "json" || extension === "toml" || extension === "yaml" || extension === "yml";
+}
+
+function resolveContextValue(fileName, isDirectory) {
+    if (isDirectory) return "directory";
+    if (isPreviewableImageName(fileName)) return "imageFile";
+    if (isMidiName(fileName)) return "midiFile";
+    if (isInspectableDataName(fileName)) return "dataFile";
+    return "file";
+}
+
+function iconForContext(contextValue) {
+    switch (contextValue) {
+        case "directory":
+            return "folder";
+        case "imageFile":
+            return "file-media";
+        case "midiFile":
+            return "file-media";
+        case "dataFile":
+            return "symbol-object";
+        default:
+            return "file";
+    }
 }
 
 module.exports = {
     CCPythonTreeProvider,
+    CCPythonTreeDragAndDropController,
     ComputerNode,
     EntryNode
 };

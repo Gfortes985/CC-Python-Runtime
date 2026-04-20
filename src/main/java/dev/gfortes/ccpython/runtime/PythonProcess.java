@@ -96,6 +96,22 @@ public final class PythonProcess {
         return eventLoop;
     }
 
+    public PythonProcessState state() {
+        return state.get();
+    }
+
+    public String detail() {
+        return detail;
+    }
+
+    public String traceback() {
+        return traceback;
+    }
+
+    public PythonLaunchSpec spec() {
+        return spec;
+    }
+
     public MinecraftServer server() {
         return owner.computer().getLevel().getServer();
     }

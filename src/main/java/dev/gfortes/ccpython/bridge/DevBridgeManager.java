@@ -4,11 +4,15 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import dan200.computercraft.core.filesystem.FileSystem;
 import dan200.computercraft.core.filesystem.FileSystemException;
+import dan200.computercraft.shared.computer.terminal.TerminalState;
 import dan200.computercraft.shared.computer.core.ServerComputer;
 import dan200.computercraft.shared.computer.core.ServerContext;
 import dev.gfortes.ccpython.CCPythonMod;
 import dev.gfortes.ccpython.config.CCPythonConfig;
 import dev.gfortes.ccpython.runtime.FileSystemAdapter;
+import dev.gfortes.ccpython.runtime.PythonLaunchSpec;
+import dev.gfortes.ccpython.runtime.PythonProcess;
+import dev.gfortes.ccpython.runtime.PythonProcessState;
 import dev.gfortes.ccpython.runtime.PythonRuntimeManager;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -19,6 +23,7 @@ import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.OpenOption;
 import java.nio.file.StandardOpenOption;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Comparator;
@@ -26,6 +31,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
@@ -33,6 +39,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import net.minecraft.server.MinecraftServer;
+import net.minecraft.server.level.ServerPlayer;
 
 public final class DevBridgeManager {
     private static final String API_ROOT = "/ccpython/bridge/v1";
@@ -45,6 +52,8 @@ public final class DevBridgeManager {
     private static final DevBridgeManager INSTANCE = new DevBridgeManager();
 
     private final Object lifecycleLock = new Object();
+    private final DevBridgeAuthStore authStore = new DevBridgeAuthStore();
+    private final DevBridgeAccessStore accessStore = new DevBridgeAccessStore();
 
     private volatile MinecraftServer minecraftServer;
     private volatile HttpServer httpServer;
@@ -68,6 +77,8 @@ public final class DevBridgeManager {
             }
 
             try {
+                authStore.load();
+                accessStore.load();
                 InetSocketAddress address = resolveBindAddress();
                 HttpServer bridge = HttpServer.create(address, 0);
                 ExecutorService pool = Executors.newCachedThreadPool(runnable -> {
@@ -134,18 +145,21 @@ public final class DevBridgeManager {
                 return;
             }
 
+            String route = routePath(exchange);
+
             MinecraftServer server = minecraftServer;
             if (server == null) {
                 sendJson(exchange, 503, error("CCPython dev bridge is not attached to a running server."));
                 return;
             }
 
-            if (!authorize(exchange)) {
+            AuthIdentity identity = authenticate(exchange, exchange.getRequestMethod(), route);
+            if (identity == null) {
                 sendJson(exchange, 401, error("Unauthorized. Localhost is trusted; remote requests require devBridge.allowRemote=true and a matching Bearer token."));
                 return;
             }
 
-            Object response = route(exchange, server);
+            Object response = route(exchange, server, route, identity);
             sendJson(exchange, 200, response);
         } catch (Throwable throwable) {
             Throwable cause = unwrap(throwable);
@@ -159,17 +173,36 @@ public final class DevBridgeManager {
         }
     }
 
-    private Object route(HttpExchange exchange, MinecraftServer server) throws Exception {
+    private Object route(HttpExchange exchange, MinecraftServer server, String route, AuthIdentity identity) throws Exception {
         String method = exchange.getRequestMethod().toUpperCase();
-        String route = routePath(exchange);
         Map<String, String> query = queryParameters(exchange);
 
         if ("/ping".equals(route) && "GET".equals(method)) {
-            return ping(server);
+            return ping(server, identity);
+        }
+
+        if ("/auth/status".equals(route) && "GET".equals(method)) {
+            return authStatus(exchange, server, identity);
+        }
+
+        if ("/auth/pair/start".equals(route) && "POST".equals(method)) {
+            String label = query.getOrDefault("label", "VS Code");
+            String player = query.get("player");
+            return startPairing(server, identity, label, player);
+        }
+
+        if ("/auth/pair/complete".equals(route) && "POST".equals(method)) {
+            String code = requireQuery(query, "code");
+            String label = query.getOrDefault("label", "VS Code");
+            return completePairing(server, code, label);
+        }
+
+        if ("/players".equals(route) && "GET".equals(method)) {
+            return ok("players", callOnServerThread(server, () -> listPlayers(server, identity)));
         }
 
         if ("/computers".equals(route) && "GET".equals(method)) {
-            return ok("computers", callOnServerThread(server, () -> listComputers(server)));
+            return ok("computers", callOnServerThread(server, () -> listComputers(server, identity)));
         }
 
         List<String> segments = pathSegments(route);
@@ -180,51 +213,153 @@ public final class DevBridgeManager {
         int computerId = parseComputerId(segments.get(1));
 
         if (segments.size() == 2 && "GET".equals(method)) {
-            return ok("computer", withComputer(server, computerId, this::describeComputer));
+            return ok("computer", withComputer(server, computerId, identity, this::describeComputer));
         }
 
         if (segments.size() == 3 && "GET".equals(method) && "files".equals(segments.get(2))) {
             String path = query.getOrDefault("path", "/");
-            return withComputerAccess(server, computerId, (computer, access) -> listFiles(computer, access, path));
+            return withComputerAccess(server, computerId, identity, (computer, access) -> listFiles(computer, access, path));
+        }
+
+        if (segments.size() == 3 && "GET".equals(method) && "runtime".equals(segments.get(2))) {
+            return withComputer(server, computerId, identity, this::runtimeState);
+        }
+
+        if (segments.size() == 3 && "GET".equals(method) && "terminal".equals(segments.get(2))) {
+            return withComputer(server, computerId, identity, this::terminalState);
+        }
+
+        if (segments.size() == 4 && "POST".equals(method) && "terminal".equals(segments.get(2)) && "input".equals(segments.get(3))) {
+            String kind = query.getOrDefault("kind", "paste");
+            byte[] body = exchange.getRequestBody().readAllBytes();
+            return withComputer(server, computerId, identity, computer -> terminalInput(computer, kind, query, body));
+        }
+
+        if (segments.size() == 3 && "GET".equals(method) && "search".equals(segments.get(2))) {
+            String path = query.getOrDefault("path", "/");
+            String searchQuery = requireQuery(query, "query");
+            int limit = parseLimit(query.get("limit"));
+            return withComputerAccess(server, computerId, identity, (computer, access) -> search(computer, access, path, searchQuery, limit));
         }
 
         if (segments.size() == 3 && "GET".equals(method) && "file".equals(segments.get(2))) {
             String path = requireQuery(query, "path");
             String encoding = normalizeEncoding(query.getOrDefault("encoding", "utf8"));
-            return withComputerAccess(server, computerId, (computer, access) -> readFile(computer, access, path, encoding));
+            return withComputerAccess(server, computerId, identity, (computer, access) -> readFile(computer, access, path, encoding));
         }
 
         if (segments.size() == 3 && "PUT".equals(method) && "file".equals(segments.get(2))) {
             String path = requireQuery(query, "path");
             String encoding = normalizeEncoding(query.getOrDefault("encoding", "raw"));
             byte[] body = exchange.getRequestBody().readAllBytes();
-            return withComputerAccess(server, computerId, (computer, access) -> writeFile(computer, access, path, encoding, body));
+            return withComputerAccess(server, computerId, identity, (computer, access) -> writeFile(computer, access, path, encoding, body));
         }
 
         if (segments.size() == 3 && "DELETE".equals(method) && "file".equals(segments.get(2))) {
             String path = requireQuery(query, "path");
-            return withComputerAccess(server, computerId, (computer, access) -> deleteFile(computer, access, path));
+            return withComputerAccess(server, computerId, identity, (computer, access) -> deleteFile(computer, access, path));
         }
 
         if (segments.size() == 3 && "POST".equals(method) && "mkdir".equals(segments.get(2))) {
             String path = requireQuery(query, "path");
-            return withComputerAccess(server, computerId, (computer, access) -> makeDir(computer, access, path));
+            return withComputerAccess(server, computerId, identity, (computer, access) -> makeDir(computer, access, path));
         }
 
         if (segments.size() == 3 && "POST".equals(method) && "move".equals(segments.get(2))) {
             String from = requireQuery(query, "from");
             String to = requireQuery(query, "to");
-            return withComputerAccess(server, computerId, (computer, access) -> move(computer, access, from, to));
+            return withComputerAccess(server, computerId, identity, (computer, access) -> move(computer, access, from, to));
+        }
+
+        if (segments.size() == 3 && "GET".equals(method) && "acl".equals(segments.get(2))) {
+            return withComputer(server, computerId, identity, computer -> aclInfo(computer, identity));
         }
 
         if (segments.size() == 4 && "POST".equals(method) && "power".equals(segments.get(2))) {
-            return withComputer(server, computerId, computer -> power(computer, segments.get(3)));
+            return withComputer(server, computerId, identity, computer -> power(computer, segments.get(3)));
+        }
+
+        if (segments.size() == 4 && "POST".equals(method) && "python".equals(segments.get(2)) && "run".equals(segments.get(3))) {
+            String program = query.get("program");
+            String cwd = query.getOrDefault("cwd", "/");
+            boolean interactive = Boolean.parseBoolean(query.getOrDefault("interactive", "false"));
+            return withComputerAccess(server, computerId, identity, (computer, access) -> runPython(computer, access, program, cwd, interactive));
+        }
+
+        if (segments.size() == 4 && "POST".equals(method) && "python".equals(segments.get(2)) && "stop".equals(segments.get(3))) {
+            String processId = query.get("process_id");
+            return withComputer(server, computerId, identity, computer -> stopPython(computer, processId));
+        }
+
+        if (segments.size() == 4 && "POST".equals(method) && "acl".equals(segments.get(2))) {
+            String player = query.get("player");
+            return switch (segments.get(3)) {
+                case "claim" -> callOnServerThread(server, () -> claimAcl(server, requireLoadedComputer(server, computerId), identity, player));
+                case "grant" -> withComputer(server, computerId, identity, computer -> grantAcl(server, computer, identity, requireQuery(query, "player")));
+                case "revoke" -> withComputer(server, computerId, identity, computer -> revokeAcl(server, computer, identity, requireQuery(query, "player")));
+                case "set-owner" -> withComputer(server, computerId, identity, computer -> setOwnerAcl(server, computer, identity, requireQuery(query, "player")));
+                default -> throw new BridgeException(404, "Unknown ACL action '" + segments.get(3) + "'.");
+            };
         }
 
         throw new BridgeException(404, "Unknown bridge endpoint '" + route + "'.");
     }
 
-    private Map<String, Object> ping(MinecraftServer server) {
+    public void assignOwnerIfAbsent(int computerId, UUID ownerUuid, String ownerName) {
+        accessStore.assignOwnerIfAbsent(computerId, ownerUuid, ownerName);
+    }
+
+    public DevBridgeAccessStore.ComputerAcl acl(int computerId) {
+        return accessStore.get(computerId);
+    }
+
+    public DevBridgeAccessStore.ComputerAcl acl(MinecraftServer server, int computerId) {
+        requireLoadedComputer(server, computerId);
+        return accessStore.get(computerId);
+    }
+
+    public DevBridgeAccessStore.ComputerAcl claimOwnership(MinecraftServer server, int computerId, UUID playerUuid, String playerName) {
+        requireLoadedComputer(server, computerId);
+        DevBridgeAccessStore.ComputerAcl acl = accessStore.claim(computerId, playerUuid, playerName);
+        if (!acl.ownerUuid().equals(playerUuid)) {
+            throw new BridgeException(403, "Computer " + computerId + " is already owned by " + acl.ownerName() + ".");
+        }
+        return acl;
+    }
+
+    public DevBridgeAccessStore.ComputerAcl grantAccess(MinecraftServer server, int computerId, UUID actorUuid, String actorName, boolean admin, UUID targetUuid, String targetName) {
+        ServerComputer computer = requireLoadedComputer(server, computerId);
+        AuthIdentity identity = admin ? AuthIdentity.admin("command", false) : AuthIdentity.player(actorUuid, actorName, "command");
+        requireManagedAcl(computer, identity);
+        return accessStore.grant(computerId, targetUuid, targetName);
+    }
+
+    public DevBridgeAccessStore.ComputerAcl revokeAccess(MinecraftServer server, int computerId, UUID actorUuid, String actorName, boolean admin, UUID targetUuid) {
+        ServerComputer computer = requireLoadedComputer(server, computerId);
+        AuthIdentity identity = admin ? AuthIdentity.admin("command", false) : AuthIdentity.player(actorUuid, actorName, "command");
+        DevBridgeAccessStore.ComputerAcl acl = requireManagedAcl(computer, identity);
+        if (acl.ownerUuid().equals(targetUuid)) {
+            throw new BridgeException(400, "The owner cannot be revoked.");
+        }
+        return accessStore.revoke(computerId, targetUuid);
+    }
+
+    public DevBridgeAccessStore.ComputerAcl setOwner(MinecraftServer server, int computerId, UUID targetUuid, String targetName) {
+        requireLoadedComputer(server, computerId);
+        return accessStore.setOwner(computerId, targetUuid, targetName);
+    }
+
+    public DevBridgeAuthStore.PairingCode startPlayerPairing(String label, UUID playerUuid, String playerName) {
+        if (!CCPythonConfig.devBridgeAllowRemote()) {
+            throw new BridgeException(400, "Remote bridge access is disabled. Enable devBridge.allowRemote first.");
+        }
+        if (!CCPythonConfig.devBridgePairingEnabled()) {
+            throw new BridgeException(403, "Bridge pairing is disabled in config.");
+        }
+        return authStore.startPairing(label, playerUuid, playerName, CCPythonConfig.devBridgePairingCodeTtlSeconds());
+    }
+
+    private Map<String, Object> ping(MinecraftServer server, AuthIdentity identity) {
         var map = new LinkedHashMap<String, Object>();
         map.put("ok", true);
         map.put("bridge", "ccpython-dev-bridge");
@@ -232,6 +367,7 @@ public final class DevBridgeManager {
         map.put("server_type", server.isDedicatedServer() ? "dedicated" : "integrated");
         map.put("remote_enabled", CCPythonConfig.devBridgeAllowRemote());
         map.put("remote_auth_required", requiresRemoteAuth());
+        map.put("pairing_enabled", CCPythonConfig.devBridgePairingEnabled());
         map.put("host", boundAddress == null ? null : boundAddress.getHostString());
         map.put("port", boundAddress == null ? null : boundAddress.getPort());
         map.put("supports", List.of(
@@ -243,17 +379,28 @@ public final class DevBridgeManager {
             "delete-file",
             "make-dir",
             "move",
-            "power"
+            "power",
+            "runtime",
+            "terminal",
+            "search",
+            "python-run",
+            "python-stop",
+            "pairing",
+            "acl",
+            "players"
         ));
+        map.put("identity", identity.toMap());
+        map.put("auth", authStore.describeAuthState());
         return map;
     }
 
-    private List<Map<String, Object>> listComputers(MinecraftServer server) {
+    private List<Map<String, Object>> listComputers(MinecraftServer server, AuthIdentity identity) {
         Map<Integer, Long> pythonCounts = PythonRuntimeManager.getInstance().activeSnapshots().stream()
             .collect(Collectors.groupingBy(snapshot -> snapshot.computerId(), Collectors.counting()));
 
         var computers = new ArrayList<ServerComputer>();
         for (ServerComputer computer : ServerContext.get(server).registry().getComputers()) {
+            if (!canAccessComputer(computer.getID(), identity)) continue;
             computers.add(computer);
         }
         computers.sort(Comparator.comparingInt(ServerComputer::getID));
@@ -281,13 +428,26 @@ public final class DevBridgeManager {
         position.put("y", computer.getPosition().getY());
         position.put("z", computer.getPosition().getZ());
 
+        DevBridgeAccessStore.ComputerAcl acl = accessStore.get(computer.getID());
+        Map<String, Object> owner = null;
+        int whitelistCount = 0;
+        if (acl != null && acl.ownerUuid() != null) {
+            owner = new LinkedHashMap<>();
+            owner.put("uuid", acl.ownerUuid().toString());
+            owner.put("name", acl.ownerName());
+            whitelistCount = acl.whitelist().size();
+        }
+
         var map = new LinkedHashMap<String, Object>();
         map.put("id", computer.getID());
         map.put("label", computer.getLabel());
         map.put("on", computer.isOn());
+        map.put("family", computer.getFamily().name().toLowerCase());
         map.put("dimension", computer.getLevel().dimension().location().toString());
         map.put("position", position);
         map.put("python_processes", pythonProcesses);
+        map.put("owner", owner);
+        map.put("whitelist_count", whitelistCount);
         return map;
     }
 
@@ -406,6 +566,316 @@ public final class DevBridgeManager {
         return map;
     }
 
+    private Map<String, Object> authStatus(HttpExchange exchange, MinecraftServer server, AuthIdentity identity) {
+        var map = ok();
+        map.put("server_type", server.isDedicatedServer() ? "dedicated" : "integrated");
+        map.put("trusted_local", isLoopback(exchange));
+        map.put("remote_enabled", CCPythonConfig.devBridgeAllowRemote());
+        map.put("remote_auth_required", requiresRemoteAuth());
+        map.put("pairing_enabled", CCPythonConfig.devBridgePairingEnabled());
+        map.put("identity", identity.toMap());
+        map.put("can_start_pairing", CCPythonConfig.devBridgeAllowRemote()
+            && CCPythonConfig.devBridgePairingEnabled()
+            && (identity.admin() || identity.isPlayer()));
+        map.put("auth", authStore.describeAuthState());
+        return map;
+    }
+
+    private Map<String, Object> startPairing(MinecraftServer server, AuthIdentity identity, String label, String playerRef) throws Exception {
+        if (!CCPythonConfig.devBridgeAllowRemote()) {
+            throw new BridgeException(400, "Remote bridge access is disabled. Enable devBridge.allowRemote first.");
+        }
+        if (!CCPythonConfig.devBridgePairingEnabled()) {
+            throw new BridgeException(403, "Bridge pairing is disabled in config.");
+        }
+
+        PlayerIdentity player;
+        if (identity.admin()) {
+            if (playerRef == null || playerRef.isBlank()) {
+                throw new BridgeException(400, "Admin pairing requires a target online player. Pass ?player=<name>.");
+            }
+            player = callOnServerThread(server, () -> resolvePlayerIdentity(server, playerRef));
+        } else if (identity.isPlayer()) {
+            player = new PlayerIdentity(identity.playerUuid(), identity.playerName() == null || identity.playerName().isBlank()
+                ? identity.playerUuid().toString()
+                : identity.playerName());
+        } else {
+            throw new BridgeException(403, "Pairing codes can only be created from a trusted admin session or an authenticated player session.");
+        }
+
+        var pairing = authStore.startPairing(label, player.uuid(), player.name(), CCPythonConfig.devBridgePairingCodeTtlSeconds());
+        CCPythonMod.LOGGER.info(
+            "Created dev bridge pairing code {} for '{}' as player '{}' (expires {}).",
+            pairing.code(),
+            pairing.label(),
+            player.name(),
+            Instant.ofEpochMilli(pairing.expiresAt())
+        );
+
+        var map = ok();
+        map.put("pairing", pairing.toMap());
+        map.put("player", player.toMap());
+        map.put("message", "Share this code with the remote VS Code client before it expires.");
+        return map;
+    }
+
+    private Map<String, Object> completePairing(MinecraftServer server, String code, String label) {
+        if (!CCPythonConfig.devBridgeAllowRemote()) {
+            throw new BridgeException(400, "Remote bridge access is disabled. Enable devBridge.allowRemote first.");
+        }
+        if (!CCPythonConfig.devBridgePairingEnabled()) {
+            throw new BridgeException(403, "Bridge pairing is disabled in config.");
+        }
+
+        var issued = authStore.completePairing(code.trim().toUpperCase(), label);
+        if (issued == null) {
+            throw new BridgeException(401, "Invalid or expired pairing code.");
+        }
+
+        var map = ok();
+        map.put("server_type", server.isDedicatedServer() ? "dedicated" : "integrated");
+        map.put("token", issued.token());
+        map.put("session", issued.toPublicMap());
+        map.put("message", "Store this bearer token in the VS Code bridge settings.");
+        return map;
+    }
+
+    private List<Map<String, Object>> listPlayers(MinecraftServer server, AuthIdentity identity) {
+        return server.getPlayerList().getPlayers().stream()
+            .sorted(Comparator.comparing(player -> player.getGameProfile().getName(), String.CASE_INSENSITIVE_ORDER))
+            .map(player -> Map.<String, Object>of(
+                "uuid", player.getUUID().toString(),
+                "name", player.getGameProfile().getName()
+            ))
+            .toList();
+    }
+
+    private Map<String, Object> aclInfo(ServerComputer computer, AuthIdentity identity) {
+        DevBridgeAccessStore.ComputerAcl acl = accessStore.get(computer.getID());
+        var map = ok();
+        map.put("computer", describeComputer(computer));
+        map.put("acl", acl == null
+            ? new DevBridgeAccessStore.ComputerAcl(computer.getID(), null, "", Map.of()).toMap()
+            : acl.toMap());
+        map.put("can_manage", canManageAcl(acl, identity));
+        map.put("has_access", canAccessComputer(computer.getID(), identity));
+        return map;
+    }
+
+    private Map<String, Object> claimAcl(MinecraftServer server, ServerComputer computer, AuthIdentity identity, String playerRef) {
+        PlayerIdentity player = targetPlayerForClaim(server, computer, identity, playerRef);
+        DevBridgeAccessStore.ComputerAcl acl = accessStore.claim(computer.getID(), player.uuid(), player.name());
+        if (!acl.ownerUuid().equals(player.uuid())) {
+            throw new BridgeException(403, "Computer " + computer.getID() + " is already owned by " + acl.ownerName() + ".");
+        }
+
+        var map = ok();
+        map.put("computer", describeComputer(computer));
+        map.put("acl", acl.toMap());
+        map.put("player", player.toMap());
+        map.put("message", "Ownership claimed.");
+        return map;
+    }
+
+    private Map<String, Object> grantAcl(MinecraftServer server, ServerComputer computer, AuthIdentity identity, String playerRef) {
+        DevBridgeAccessStore.ComputerAcl current = requireManagedAcl(computer, identity);
+        PlayerIdentity player = resolvePlayerIdentity(server, playerRef);
+        if (current.ownerUuid().equals(player.uuid())) {
+            throw new BridgeException(400, "The owner already has access.");
+        }
+
+        DevBridgeAccessStore.ComputerAcl acl = accessStore.grant(computer.getID(), player.uuid(), player.name());
+        var map = ok();
+        map.put("computer", describeComputer(computer));
+        map.put("acl", acl.toMap());
+        map.put("player", player.toMap());
+        map.put("message", "Player access granted.");
+        return map;
+    }
+
+    private Map<String, Object> revokeAcl(MinecraftServer server, ServerComputer computer, AuthIdentity identity, String playerRef) {
+        DevBridgeAccessStore.ComputerAcl current = requireManagedAcl(computer, identity);
+        PlayerIdentity player = resolvePlayerIdentity(server, playerRef);
+        if (current.ownerUuid().equals(player.uuid())) {
+            throw new BridgeException(400, "Use set-owner if you need to transfer ownership. The owner cannot be revoked.");
+        }
+
+        DevBridgeAccessStore.ComputerAcl acl = accessStore.revoke(computer.getID(), player.uuid());
+        var map = ok();
+        map.put("computer", describeComputer(computer));
+        map.put("acl", acl.toMap());
+        map.put("player", player.toMap());
+        map.put("message", "Player access revoked.");
+        return map;
+    }
+
+    private Map<String, Object> setOwnerAcl(MinecraftServer server, ServerComputer computer, AuthIdentity identity, String playerRef) {
+        if (!identity.admin()) {
+            throw new BridgeException(403, "Only bridge admins can transfer ownership.");
+        }
+
+        PlayerIdentity player = resolvePlayerIdentity(server, playerRef);
+        DevBridgeAccessStore.ComputerAcl acl = accessStore.setOwner(computer.getID(), player.uuid(), player.name());
+
+        var map = ok();
+        map.put("computer", describeComputer(computer));
+        map.put("acl", acl.toMap());
+        map.put("player", player.toMap());
+        map.put("message", "Owner updated.");
+        return map;
+    }
+
+    private Map<String, Object> runtimeState(ServerComputer computer) {
+        var runtimeManager = PythonRuntimeManager.getInstance();
+        var processes = new ArrayList<>(runtimeManager.processes(computer.getID()));
+        processes.sort(Comparator.comparingLong(process -> process.snapshot().startedAt()));
+
+        var processMaps = new ArrayList<Map<String, Object>>(processes.size());
+        for (var process : processes) {
+            processMaps.add(describeProcess(process));
+        }
+
+        var map = ok();
+        map.put("computer", describeComputer(computer));
+        map.put("status", aggregateRuntimeStatus(processes));
+        map.put("processes", processMaps);
+
+        var lastSnapshot = runtimeManager.lastSnapshot(computer.getID());
+        if (lastSnapshot != null) {
+            map.put("last_process", describeSnapshot(lastSnapshot, runtimeManager.lastTraceback(computer.getID())));
+        } else {
+            map.put("last_process", null);
+        }
+        return map;
+    }
+
+    private Map<String, Object> terminalState(ServerComputer computer) {
+        var map = ok();
+        map.put("computer", describeComputer(computer));
+
+        TerminalState state = computer.getTerminalState();
+        if (state == null) {
+            map.put("available", false);
+            map.put("width", 0);
+            map.put("height", 0);
+            map.put("cursor_x", 0);
+            map.put("cursor_y", 0);
+            map.put("lines", List.of());
+            return map;
+        }
+
+        var terminal = state.create();
+        var lines = new ArrayList<Map<String, Object>>(terminal.getHeight());
+        for (int index = 0; index < terminal.getHeight(); index++) {
+            var line = new LinkedHashMap<String, Object>();
+            line.put("index", index + 1);
+            line.put("text", terminal.getLine(index).toString());
+            line.put("text_color", terminal.getTextColourLine(index).toString());
+            line.put("background_color", terminal.getBackgroundColourLine(index).toString());
+            lines.add(line);
+        }
+
+        map.put("available", true);
+        map.put("width", terminal.getWidth());
+        map.put("height", terminal.getHeight());
+        map.put("cursor_x", terminal.getCursorX());
+        map.put("cursor_y", terminal.getCursorY());
+        map.put("colour", terminal.isColour());
+        map.put("lines", lines);
+        return map;
+    }
+
+    private Map<String, Object> terminalInput(ServerComputer computer, String kind, Map<String, String> query, byte[] body) {
+        switch (kind.toLowerCase()) {
+            case "char" -> {
+                String value = decodeTerminalInput(query.get("text"), body);
+                if (value.isEmpty()) throw new BridgeException(400, "Character input cannot be empty.");
+                for (int index = 0; index < value.length(); index++) {
+                    computer.queueEvent("char", new Object[] { String.valueOf(value.charAt(index)) });
+                }
+            }
+            case "paste" -> {
+                String value = decodeTerminalInput(query.get("text"), body);
+                if (value.isEmpty()) throw new BridgeException(400, "Paste input cannot be empty.");
+                computer.queueEvent("paste", new Object[] { value });
+            }
+            case "key" -> {
+                String rawKey = requireQuery(query, "key");
+                int key;
+                try {
+                    key = Integer.parseInt(rawKey);
+                } catch (NumberFormatException exception) {
+                    throw new BridgeException(400, "Invalid key code '" + rawKey + "'.");
+                }
+                computer.queueEvent("key", new Object[] { key, false });
+                computer.queueEvent("key_up", new Object[] { key });
+            }
+            case "terminate" -> computer.queueEvent("terminate");
+            default -> throw new BridgeException(400, "Unsupported terminal input kind '" + kind + "'.");
+        }
+
+        var map = ok();
+        map.put("computer", describeComputer(computer));
+        map.put("kind", kind.toLowerCase());
+        return map;
+    }
+
+    private Map<String, Object> runPython(ServerComputer computer, BridgeComputerAccess access, String rawProgram, String rawCwd, boolean interactive) throws Exception {
+        String cwd = FileSystemAdapter.normalizeWorkingDir(rawCwd == null || rawCwd.isBlank() ? "/" : rawCwd);
+        String program = interactive ? null : FileSystemAdapter.normalizeProgramPath(rawProgram, cwd);
+        if (!interactive && (program == null || program.isBlank())) {
+            throw new BridgeException(400, "Python run requires a program path unless interactive=true.");
+        }
+
+        var process = PythonRuntimeManager.getInstance().launch(
+            access.computerSystem(),
+            new PythonLaunchSpec(program, cwd, List.of(), interactive)
+        );
+
+        var map = ok();
+        map.put("computer", describeComputer(computer));
+        map.put("process", describeProcess(process));
+        return map;
+    }
+
+    private Map<String, Object> stopPython(ServerComputer computer, String processId) {
+        int stopped;
+        if (processId != null && !processId.isBlank()) {
+            boolean found = PythonRuntimeManager.getInstance().stopProcess(
+                computer.getID(),
+                processId,
+                "Stopped from VS Code bridge."
+            );
+            if (!found) {
+                throw new BridgeException(404, "Python process '" + processId + "' is not active on computer " + computer.getID() + ".");
+            }
+            stopped = 1;
+        } else {
+            stopped = PythonRuntimeManager.getInstance().stopAllProcesses(computer.getID(), "Stopped from VS Code bridge.");
+        }
+
+        var map = ok();
+        map.put("computer", describeComputer(computer));
+        map.put("stopped", stopped);
+        return map;
+    }
+
+    private Map<String, Object> search(ServerComputer computer, BridgeComputerAccess access, String rawPath, String rawQuery, int limit) throws Exception {
+        String path = normalizePath(rawPath);
+        String query = rawQuery == null ? "" : rawQuery.trim();
+        if (query.isBlank()) throw new BridgeException(400, "Search query cannot be empty.");
+
+        var results = new ArrayList<Map<String, Object>>();
+        searchRecursive(access.fileSystem(), path, query.toLowerCase(), limit, results);
+
+        var map = ok();
+        map.put("computer", describeComputer(computer));
+        map.put("path", path);
+        map.put("query", rawQuery);
+        map.put("results", results);
+        return map;
+    }
+
     private Map<String, Object> fileEntry(FileSystem fileSystem, String path, String name) throws FileSystemException {
         var attributes = fileSystem.getAttributes(path);
         var map = new LinkedHashMap<String, Object>();
@@ -417,6 +887,97 @@ public final class DevBridgeManager {
         map.put("created", attributes.creationTime().toMillis());
         map.put("read_only", fileSystem.isReadOnly(path));
         return map;
+    }
+
+    private Map<String, Object> describeProcess(PythonProcess process) {
+        return describeSnapshot(process.snapshot(), process.traceback());
+    }
+
+    private Map<String, Object> describeSnapshot(dev.gfortes.ccpython.runtime.PythonStatusSnapshot snapshot, String traceback) {
+        var map = new LinkedHashMap<String, Object>();
+        map.put("computer_id", snapshot.computerId());
+        map.put("process_id", snapshot.processId());
+        map.put("state", snapshot.state().name().toLowerCase());
+        map.put("program", snapshot.program());
+        map.put("interactive", snapshot.interactive());
+        map.put("started_at", snapshot.startedAt());
+        map.put("detail", snapshot.detail());
+        map.put("traceback", traceback == null || traceback.isBlank() ? null : traceback);
+        return map;
+    }
+
+    private String aggregateRuntimeStatus(List<PythonProcess> processes) {
+        if (processes.isEmpty()) return "idle";
+        if (processes.stream().anyMatch(process -> process.state() == PythonProcessState.RUNNING)) return "running";
+        if (processes.stream().anyMatch(process -> process.state() == PythonProcessState.STARTING)) return "starting";
+        if (processes.stream().anyMatch(process -> process.state() == PythonProcessState.WAITING_EVENT)) return "waiting_event";
+        if (processes.stream().anyMatch(process -> process.state() == PythonProcessState.WAITING_HOST)) return "waiting_host";
+        if (processes.stream().anyMatch(process -> process.state() == PythonProcessState.FAILED)) return "failed";
+        if (processes.stream().anyMatch(process -> process.state() == PythonProcessState.KILLED)) return "killed";
+        return "active";
+    }
+
+    private void searchRecursive(FileSystem fileSystem, String path, String queryLower, int limit, List<Map<String, Object>> results) throws Exception {
+        if (results.size() >= limit) return;
+        if (!exists(fileSystem, path)) throw new BridgeException(404, "Path '" + path + "' does not exist.");
+
+        if (!isDir(fileSystem, path)) {
+            maybeSearchFile(fileSystem, path, queryLower, limit, results);
+            return;
+        }
+
+        var children = new ArrayList<>(fileSystem.list(path));
+        children.sort(String::compareToIgnoreCase);
+        for (String child : children) {
+            if (results.size() >= limit) return;
+            searchRecursive(fileSystem, FileSystemAdapter.combine(path, child), queryLower, limit, results);
+        }
+    }
+
+    private void maybeSearchFile(FileSystem fileSystem, String path, String queryLower, int limit, List<Map<String, Object>> results) throws Exception {
+        if (results.size() >= limit) return;
+
+        String fileName = path.substring(path.lastIndexOf('/') + 1);
+        if (fileName.toLowerCase().contains(queryLower)) {
+            var match = new LinkedHashMap<String, Object>();
+            match.put("path", path);
+            match.put("kind", "path");
+            match.put("line", null);
+            match.put("snippet", path);
+            results.add(match);
+            if (results.size() >= limit) return;
+        }
+
+        long size = fileSystem.getAttributes(path).size();
+        if (size > 512L * 1024L) return;
+
+        byte[] bytes = readAllBytes(fileSystem, path);
+        if (!isProbablyText(bytes)) return;
+
+        String text = new String(bytes, StandardCharsets.UTF_8);
+        String[] lines = text.split("\\R", -1);
+        for (int index = 0; index < lines.length && results.size() < limit; index++) {
+            String line = lines[index];
+            if (!line.toLowerCase().contains(queryLower)) continue;
+
+            var match = new LinkedHashMap<String, Object>();
+            match.put("path", path);
+            match.put("kind", "content");
+            match.put("line", index + 1);
+            match.put("snippet", line.strip());
+            results.add(match);
+        }
+    }
+
+    private boolean isProbablyText(byte[] bytes) {
+        int suspicious = 0;
+        for (byte raw : bytes) {
+            int value = raw & 0xFF;
+            if (value == 0) return false;
+            if (value < 0x09 || (value > 0x0D && value < 0x20)) suspicious++;
+            if (suspicious > 8) return false;
+        }
+        return true;
     }
 
     private static String encodeContent(byte[] bytes, String encoding) {
@@ -444,15 +1005,35 @@ public final class DevBridgeManager {
         return FileSystemAdapter.sanitize(rawPath == null || rawPath.isBlank() ? "/" : rawPath);
     }
 
-    private boolean authorize(HttpExchange exchange) {
-        if (isLoopback(exchange)) return true;
-        if (!CCPythonConfig.devBridgeAllowRemote()) return false;
+    private String decodeTerminalInput(String queryText, byte[] body) {
+        if (body != null && body.length > 0) {
+            return new String(body, StandardCharsets.UTF_8);
+        }
+        return queryText == null ? "" : queryText;
+    }
 
-        String token = CCPythonConfig.devBridgeAuthToken();
-        if (token.isBlank()) return false;
+    private AuthIdentity authenticate(HttpExchange exchange, String method, String route) {
+        if (isLoopback(exchange)) return AuthIdentity.admin("localhost", true);
+        if (!CCPythonConfig.devBridgeAllowRemote()) return null;
 
-        String header = exchange.getRequestHeaders().getFirst("Authorization");
-        return ("Bearer " + token).equals(header);
+        if (isPairCompletionRoute(method, route)) {
+            return CCPythonConfig.devBridgePairingEnabled() ? AuthIdentity.pairing() : null;
+        }
+
+        String header = bearerToken(exchange);
+        if (header.isBlank()) return null;
+
+        String staticToken = CCPythonConfig.devBridgeAuthToken();
+        if (!staticToken.isBlank() && staticToken.equals(header)) {
+            return AuthIdentity.admin("static-token", false);
+        }
+
+        DevBridgeAuthStore.IssuedToken issued = authStore.validate(header);
+        if (issued == null) return null;
+        if (issued.kind() == DevBridgeAuthStore.TokenKind.ADMIN || issued.playerUuid() == null) {
+            return AuthIdentity.admin("token:" + issued.tokenId(), false);
+        }
+        return AuthIdentity.player(issued.playerUuid(), issued.playerName(), "token:" + issued.tokenId());
     }
 
     private boolean isLoopback(HttpExchange exchange) {
@@ -462,6 +1043,19 @@ public final class DevBridgeManager {
 
     private boolean requiresRemoteAuth() {
         return CCPythonConfig.devBridgeAllowRemote();
+    }
+
+    private String bearerToken(HttpExchange exchange) {
+        String header = exchange.getRequestHeaders().getFirst("Authorization");
+        if (header == null || header.isBlank()) return "";
+        if (header.regionMatches(true, 0, "Bearer ", 0, "Bearer ".length())) {
+            return header.substring("Bearer ".length()).trim();
+        }
+        return "";
+    }
+
+    private boolean isPairCompletionRoute(String method, String route) {
+        return "POST".equalsIgnoreCase(method) && "/auth/pair/complete".equals(route);
     }
 
     private InetSocketAddress resolveBindAddress() throws IOException {
@@ -515,28 +1109,115 @@ public final class DevBridgeManager {
         }
     }
 
+    private int parseLimit(String raw) {
+        if (raw == null || raw.isBlank()) return 100;
+        try {
+            return Math.clamp(Integer.parseInt(raw), 1, 500);
+        } catch (NumberFormatException exception) {
+            throw new BridgeException(400, "Invalid limit '" + raw + "'.");
+        }
+    }
+
     private String requireQuery(Map<String, String> query, String key) {
         String value = query.get(key);
         if (value == null || value.isBlank()) throw new BridgeException(400, "Missing required query parameter '" + key + "'.");
         return value;
     }
 
-    private <T> T withComputer(MinecraftServer server, int computerId, ComputerOperation<T> operation) throws Exception {
-        return callOnServerThread(server, () -> operation.run(requireComputer(server, computerId)));
+    private <T> T withComputer(MinecraftServer server, int computerId, AuthIdentity identity, ComputerOperation<T> operation) throws Exception {
+        return callOnServerThread(server, () -> operation.run(requireComputer(server, computerId, identity)));
     }
 
-    private <T> T withComputerAccess(MinecraftServer server, int computerId, ComputerAccessOperation<T> operation) throws Exception {
+    private <T> T withComputerAccess(MinecraftServer server, int computerId, AuthIdentity identity, ComputerAccessOperation<T> operation) throws Exception {
         return callOnServerThread(server, () -> {
-            ServerComputer computer = requireComputer(server, computerId);
+            ServerComputer computer = requireComputer(server, computerId, identity);
             return operation.run(computer, BridgeComputerAccess.resolve(computer));
         });
     }
 
-    private ServerComputer requireComputer(MinecraftServer server, int computerId) {
+    private ServerComputer requireLoadedComputer(MinecraftServer server, int computerId) {
         for (ServerComputer computer : ServerContext.get(server).registry().getComputers()) {
             if (computer.getID() == computerId) return computer;
         }
         throw new BridgeException(404, "Computer " + computerId + " is not currently loaded.");
+    }
+
+    private ServerComputer requireComputer(MinecraftServer server, int computerId, AuthIdentity identity) {
+        ServerComputer computer = requireLoadedComputer(server, computerId);
+        if (canAccessComputer(computer.getID(), identity)) {
+            return computer;
+        }
+        throw new BridgeException(403, "Access denied to computer " + computerId + ".");
+    }
+
+    private boolean canAccessComputer(int computerId, AuthIdentity identity) {
+        if (identity.admin()) return true;
+        return identity.isPlayer() && accessStore.canAccess(computerId, identity.playerUuid());
+    }
+
+    private boolean canManageAcl(DevBridgeAccessStore.ComputerAcl acl, AuthIdentity identity) {
+        if (identity.admin()) return true;
+        return identity.isPlayer()
+            && acl != null
+            && acl.ownerUuid() != null
+            && acl.ownerUuid().equals(identity.playerUuid());
+    }
+
+    private DevBridgeAccessStore.ComputerAcl requireManagedAcl(ServerComputer computer, AuthIdentity identity) {
+        DevBridgeAccessStore.ComputerAcl acl = accessStore.get(computer.getID());
+        if (acl == null || acl.ownerUuid() == null) {
+            throw new BridgeException(409, "Computer " + computer.getID() + " has no owner yet. Claim it first.");
+        }
+        if (!canManageAcl(acl, identity)) {
+            throw new BridgeException(403, "Only the owner or a bridge admin can change access for computer " + computer.getID() + ".");
+        }
+        return acl;
+    }
+
+    private PlayerIdentity targetPlayerForClaim(MinecraftServer server, ServerComputer computer, AuthIdentity identity, String playerRef) {
+        DevBridgeAccessStore.ComputerAcl acl = accessStore.get(computer.getID());
+        if (identity.admin()) {
+            if (playerRef == null || playerRef.isBlank()) {
+                throw new BridgeException(400, "Admin claim requires ?player=<name>.");
+            }
+            return resolvePlayerIdentity(server, playerRef);
+        }
+
+        if (!identity.isPlayer()) {
+            throw new BridgeException(403, "Only authenticated players can claim ownership.");
+        }
+
+        if (acl != null && acl.ownerUuid() != null && !acl.ownerUuid().equals(identity.playerUuid())) {
+            throw new BridgeException(403, "Computer " + computer.getID() + " is already owned by " + acl.ownerName() + ".");
+        }
+
+        return new PlayerIdentity(identity.playerUuid(), identity.playerName() == null || identity.playerName().isBlank()
+            ? identity.playerUuid().toString()
+            : identity.playerName());
+    }
+
+    private PlayerIdentity resolvePlayerIdentity(MinecraftServer server, String raw) {
+        if (raw == null || raw.isBlank()) {
+            throw new BridgeException(400, "Player reference cannot be empty.");
+        }
+
+        String candidate = raw.trim();
+        try {
+            UUID uuid = UUID.fromString(candidate);
+            ServerPlayer byUuid = server.getPlayerList().getPlayer(uuid);
+            if (byUuid != null) {
+                return new PlayerIdentity(byUuid.getUUID(), byUuid.getGameProfile().getName());
+            }
+        } catch (IllegalArgumentException ignored) {
+        }
+
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            if (player.getGameProfile().getName().equalsIgnoreCase(candidate)) {
+                return new PlayerIdentity(player.getUUID(), player.getGameProfile().getName());
+            }
+        }
+
+        throw new BridgeException(404, "Online player '" + candidate + "' was not found.");
     }
 
     private <T> T callOnServerThread(MinecraftServer server, CheckedSupplier<T> supplier) throws Exception {
@@ -649,6 +1330,44 @@ public final class DevBridgeManager {
     @FunctionalInterface
     private interface ComputerAccessOperation<T> {
         T run(ServerComputer computer, BridgeComputerAccess access) throws Exception;
+    }
+
+    private record AuthIdentity(boolean authenticated, boolean admin, boolean loopback, UUID playerUuid, String playerName, String source) {
+        static AuthIdentity admin(String source, boolean loopback) {
+            return new AuthIdentity(true, true, loopback, null, null, source);
+        }
+
+        static AuthIdentity player(UUID playerUuid, String playerName, String source) {
+            return new AuthIdentity(true, false, false, playerUuid, playerName, source);
+        }
+
+        static AuthIdentity pairing() {
+            return new AuthIdentity(true, false, false, null, null, "pairing");
+        }
+
+        boolean isPlayer() {
+            return playerUuid != null;
+        }
+
+        Map<String, Object> toMap() {
+            var map = new LinkedHashMap<String, Object>();
+            map.put("authenticated", authenticated);
+            map.put("admin", admin);
+            map.put("loopback", loopback);
+            map.put("player_uuid", playerUuid == null ? null : playerUuid.toString());
+            map.put("player_name", playerName);
+            map.put("source", source);
+            return map;
+        }
+    }
+
+    private record PlayerIdentity(UUID uuid, String name) {
+        Map<String, Object> toMap() {
+            var map = new LinkedHashMap<String, Object>();
+            map.put("uuid", uuid.toString());
+            map.put("name", name);
+            return map;
+        }
     }
 
     private static final class BridgeException extends RuntimeException {

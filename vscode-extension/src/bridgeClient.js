@@ -23,14 +23,64 @@ class BridgeClient {
         return this.request("GET", "/ping");
     }
 
+    async authStatus() {
+        return this.request("GET", "/auth/status");
+    }
+
+    async startPairing(label = "VS Code", player = null) {
+        return this.request("POST", "/auth/pair/start", {
+            query: { label, player }
+        });
+    }
+
+    async completePairing(code, label = "VS Code") {
+        return this.request("POST", "/auth/pair/complete", {
+            query: { code, label }
+        });
+    }
+
     async listComputers() {
         const response = await this.request("GET", "/computers");
         return response.computers || [];
     }
 
+    async listPlayers() {
+        const response = await this.request("GET", "/players");
+        return response.players || [];
+    }
+
     async getComputer(computerId) {
         const response = await this.request("GET", `/computers/${computerId}`);
         return response.computer;
+    }
+
+    async getAcl(computerId) {
+        const response = await this.request("GET", `/computers/${computerId}/acl`);
+        return response.acl || null;
+    }
+
+    async claimAcl(computerId, player = null) {
+        return this.request("POST", `/computers/${computerId}/acl/claim`, {
+            query: player ? { player } : {}
+        });
+    }
+
+    async grantAcl(computerId, player) {
+        return this.request("POST", `/computers/${computerId}/acl/grant`, {
+            query: { player }
+        });
+    }
+
+    async revokeAcl(computerId, player) {
+        return this.request("POST", `/computers/${computerId}/acl/revoke`, {
+            query: { player }
+        });
+    }
+
+    async setOwnerAcl(computerId, player) {
+        return this.request("POST", `/computers/${computerId}/acl/set-owner`, {
+            query: { player }
+        });
     }
 
     async listFiles(computerId, path) {
@@ -84,6 +134,66 @@ class BridgeClient {
 
     async power(computerId, action) {
         return this.request("POST", `/computers/${computerId}/power/${action}`);
+    }
+
+    async runtimeState(computerId) {
+        return this.request("GET", `/computers/${computerId}/runtime`);
+    }
+
+    async terminalState(computerId) {
+        return this.request("GET", `/computers/${computerId}/terminal`);
+    }
+
+    async sendTerminalPaste(computerId, text) {
+        return this.request("POST", `/computers/${computerId}/terminal/input`, {
+            query: { kind: "paste" },
+            body: Buffer.from(text, "utf8")
+        });
+    }
+
+    async sendTerminalChar(computerId, text) {
+        return this.request("POST", `/computers/${computerId}/terminal/input`, {
+            query: { kind: "char" },
+            body: Buffer.from(text, "utf8")
+        });
+    }
+
+    async sendTerminalKey(computerId, key) {
+        return this.request("POST", `/computers/${computerId}/terminal/input`, {
+            query: { kind: "key", key }
+        });
+    }
+
+    async sendTerminalTerminate(computerId) {
+        return this.request("POST", `/computers/${computerId}/terminal/input`, {
+            query: { kind: "terminate" }
+        });
+    }
+
+    async runPython(computerId, program, options = {}) {
+        const query = {
+            cwd: options.cwd || "/",
+            interactive: options.interactive ? "true" : "false"
+        };
+        if (program) query.program = program;
+        return this.request("POST", `/computers/${computerId}/python/run`, { query });
+    }
+
+    async stopPython(computerId, processId) {
+        return this.request("POST", `/computers/${computerId}/python/stop`, {
+            query: processId ? { process_id: processId } : {}
+        });
+    }
+
+    async search(computerId, query, options = {}) {
+        const response = await this.request("GET", `/computers/${computerId}/search`, {
+            query: {
+                query,
+                path: options.path || "/",
+                limit: options.limit || 100
+            }
+        });
+        return response.results || [];
     }
 
     async statPath(computerId, path) {

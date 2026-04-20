@@ -12,6 +12,8 @@ public final class PythonComputerContext {
     private final Map<String, PythonProcess> processes = new ConcurrentHashMap<>();
     private final PythonComputerRuntime runtime;
     private volatile IComputerSystem computer;
+    private volatile PythonStatusSnapshot lastSnapshot;
+    private volatile String lastTraceback = "";
 
     public PythonComputerContext(IComputerSystem computer) {
         this.computer = computer;
@@ -43,6 +45,8 @@ public final class PythonComputerContext {
     }
 
     public void detach(PythonProcess process) {
+        lastSnapshot = process.snapshot();
+        lastTraceback = process.traceback();
         processes.remove(process.id());
         NetworkSyncManager.broadcastClear(computer.getLevel(), computer.getID(), process.id());
     }
@@ -61,5 +65,21 @@ public final class PythonComputerContext {
         return processes.values().stream()
             .map(PythonProcess::snapshot)
             .toList();
+    }
+
+    public List<PythonProcess> processes() {
+        return List.copyOf(processes.values());
+    }
+
+    public PythonProcess process(String processId) {
+        return processes.get(processId);
+    }
+
+    public PythonStatusSnapshot lastSnapshot() {
+        return lastSnapshot;
+    }
+
+    public String lastTraceback() {
+        return lastTraceback;
     }
 }

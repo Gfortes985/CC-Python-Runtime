@@ -58,6 +58,54 @@ public final class PythonRuntimeManager {
         return snapshots;
     }
 
+    public PythonComputerContext context(int computerId) {
+        return computers.get(computerId);
+    }
+
+    public List<PythonStatusSnapshot> snapshots(int computerId) {
+        var context = computers.get(computerId);
+        return context == null ? List.of() : context.snapshots();
+    }
+
+    public List<PythonProcess> processes(int computerId) {
+        var context = computers.get(computerId);
+        return context == null ? List.of() : context.processes();
+    }
+
+    public PythonProcess process(int computerId, String processId) {
+        var context = computers.get(computerId);
+        return context == null ? null : context.process(processId);
+    }
+
+    public PythonStatusSnapshot lastSnapshot(int computerId) {
+        var context = computers.get(computerId);
+        return context == null ? null : context.lastSnapshot();
+    }
+
+    public String lastTraceback(int computerId) {
+        var context = computers.get(computerId);
+        return context == null ? "" : context.lastTraceback();
+    }
+
+    public boolean stopProcess(int computerId, String processId, String reason) {
+        var process = process(computerId, processId);
+        if (process == null) return false;
+        process.requestKill(reason);
+        return true;
+    }
+
+    public int stopAllProcesses(int computerId, String reason) {
+        var context = computers.get(computerId);
+        if (context == null) return 0;
+
+        int stopped = 0;
+        for (var process : context.processes()) {
+            process.requestKill(reason);
+            stopped++;
+        }
+        return stopped;
+    }
+
     public void syncPlayer(ServerPlayer player) {
         NetworkSyncManager.syncPlayer(player, activeSnapshots());
     }

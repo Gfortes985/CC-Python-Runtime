@@ -25,6 +25,8 @@ public final class CCPythonConfig {
     public static final ModConfigSpec.IntValue DEV_BRIDGE_PORT;
     public static final ModConfigSpec.BooleanValue DEV_BRIDGE_ALLOW_REMOTE;
     public static final ModConfigSpec.ConfigValue<String> DEV_BRIDGE_AUTH_TOKEN;
+    public static final ModConfigSpec.BooleanValue DEV_BRIDGE_ENABLE_PAIRING;
+    public static final ModConfigSpec.IntValue DEV_BRIDGE_PAIRING_CODE_TTL_SECONDS;
     public static final ModConfigSpec.BooleanValue ENABLE_RELAXED_SINGLEPLAYER_LIMITS;
     public static final ModConfigSpec.IntValue SINGLEPLAYER_MAX_PROCESSES_PER_COMPUTER;
     public static final ModConfigSpec.IntValue SINGLEPLAYER_MAX_PARALLEL_RUNTIMES;
@@ -101,6 +103,15 @@ public final class CCPythonConfig {
                 "Localhost requests stay trusted even when allowRemote is enabled."
             )
             .define("authToken", "");
+        DEV_BRIDGE_ENABLE_PAIRING = builder
+            .comment(
+                "Allow remote VS Code clients to pair through one-time bridge codes.",
+                "Pairing codes can be created from a trusted local bridge session and exchanged for a persistent bearer token."
+            )
+            .define("enablePairing", true);
+        DEV_BRIDGE_PAIRING_CODE_TTL_SECONDS = builder
+            .comment("Lifetime of one-time remote bridge pairing codes in seconds.")
+            .defineInRange("pairingCodeTtlSeconds", 300, 30, 3600);
         builder.pop();
 
         builder.push("singleplayer");
@@ -195,8 +206,28 @@ public final class CCPythonConfig {
         return DEV_BRIDGE_AUTH_TOKEN.get().trim();
     }
 
+    public static boolean devBridgePairingEnabled() {
+        return DEV_BRIDGE_ENABLE_PAIRING.get();
+    }
+
+    public static int devBridgePairingCodeTtlSeconds() {
+        return DEV_BRIDGE_PAIRING_CODE_TTL_SECONDS.get();
+    }
+
     public static Path soundfontConfigDirectory() {
         return configDirectory().resolve(CCPythonMod.MOD_ID).resolve("soundfonts");
+    }
+
+    public static Path bridgeConfigDirectory() {
+        return configDirectory().resolve(CCPythonMod.MOD_ID).resolve("bridge");
+    }
+
+    public static Path bridgeTokenStorePath() {
+        return bridgeConfigDirectory().resolve("tokens.tsv");
+    }
+
+    public static Path bridgeAclStorePath() {
+        return bridgeConfigDirectory().resolve("acl.tsv");
     }
 
     public static Path configDirectory() {
@@ -208,6 +239,14 @@ public final class CCPythonConfig {
             Files.createDirectories(soundfontConfigDirectory());
         } catch (IOException exception) {
             CCPythonMod.LOGGER.warn("Failed to create MIDI soundfont config directory {}.", soundfontConfigDirectory(), exception);
+        }
+    }
+
+    public static void ensureBridgeConfigDirectory() {
+        try {
+            Files.createDirectories(bridgeConfigDirectory());
+        } catch (IOException exception) {
+            CCPythonMod.LOGGER.warn("Failed to create dev bridge config directory {}.", bridgeConfigDirectory(), exception);
         }
     }
 
